@@ -1,0 +1,326 @@
+#include <stdint.h>
+
+#include "console.h"
+#include "io.h"
+#include "mem.h"
+#include "net.h"
+#include "ip.h"
+#include "virtio_net.h"
+
+
+#define ETH_HLEN        14
+#define ETHERTYPE_ARP   0x0806
+#define ETHERTYPE_IPV4  0x0800
+
+#define ARP_LEN         28
+#define ARP_OP_REQUEST  1
+#define ARP_OP_REPLY    2
+
+#define ARP_CACHE_SIZE  8
+
+/*
+ * Aproximacion: bajo QEMU/TCG el TSC avanza ~1 tick por ns.
+ * Se sustituira por un temporizador real (PIT/HPET) mas adelante.
+ */
+#define NET_TSC_PER_MS  1000000ULL
+
+
+uint8_t net_mac[6];
+uint8_t net_ip[4]      = { 10, 0, 2, 15 };
+uint8_t net_gateway[4] = { 10, 0, 2, 2 };
+
+
+struct arp_entry {
+    uint8_t ip[4];
+    uint8_t mac[6];
+    uint8_t valid;
+};
+
+static struct arp_entry arp_cache[ARP_CACHE_SIZE];
+static uint8_t arp_next;
+
+static uint8_t rx_frame[2048];
+
+
+static uint16_t rd16(const uint8_t *p)
+{
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+
+static void wr16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v >> 8);
+    p[1] = (uint8_t)v;
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Cache ARP                                                        */
+/* ---------------------------------------------------------------- */
+
+static int arp_lookup(const uint8_t *ip, uint8_t *mac_out)
+{
+    for (int i = 0; i < ARP_CACHE_SIZE; ++i) {
+
+        if (arp_cache[i].valid && memcmp(arp_cache[i].ip, ip, 4) == 0) {
+            memcpy(mac_out, arp_cache[i].mac, 6);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+
+/* Devuelve 1 si la entrada es nueva o ha cambiado. */
+static int arp_learn(const uint8_t *ip, const uint8_t *mac)
+{
+    for (int i = 0; i < ARP_CACHE_SIZE; ++i) {
+
+        if (arp_cache[i].valid && memcmp(arp_cache[i].ip, ip, 4) == 0) {
+
+            if (memcmp(arp_cache[i].mac, mac, 6) == 0) {
+                return 0;
+            }
+
+            memcpy(arp_cache[i].mac, mac, 6);
+            return 1;
+        }
+    }
+
+    struct arp_entry *e = &arp_cache[arp_next % ARP_CACHE_SIZE];
+    arp_next++;
+
+    memcpy(e->ip, ip, 4);
+    memcpy(e->mac, mac, 6);
+    e->valid = 1;
+
+    return 1;
+}
+
+
+static void arp_dump_cache(void)
+{
+    kprint("ARP cache:\n");
+
+    for (int i = 0; i < ARP_CACHE_SIZE; ++i) {
+
+        if (!arp_cache[i].valid) {
+            continue;
+        }
+
+        kprint("    ");
+        kprint_ip(arp_cache[i].ip);
+        kprint(" -> ");
+        kprint_mac(arp_cache[i].mac);
+        kprint("\n");
+    }
+}
+
+
+/* ---------------------------------------------------------------- */
+/* ARP                                                              */
+/* ---------------------------------------------------------------- */
+
+static void arp_send(
+    uint16_t op,
+    const uint8_t *eth_dst,
+    const uint8_t *target_mac,
+    const uint8_t *target_ip
+)
+{
+    uint8_t f[ETH_HLEN + ARP_LEN + 18];
+
+    memset(f, 0, sizeof(f));
+
+    memcpy(f, eth_dst, 6);
+    memcpy(f + 6, net_mac, 6);
+    wr16(f + 12, ETHERTYPE_ARP);
+
+    uint8_t *a = f + ETH_HLEN;
+
+    wr16(a, 1);                 /* hardware: Ethernet */
+    wr16(a + 2, ETHERTYPE_IPV4);
+    a[4] = 6;
+    a[5] = 4;
+    wr16(a + 6, op);
+
+    memcpy(a + 8,  net_mac, 6);
+    memcpy(a + 14, net_ip, 4);
+    memcpy(a + 18, target_mac, 6);
+    memcpy(a + 24, target_ip, 4);
+
+    virtio_net_send(f, sizeof(f));
+}
+
+
+static void handle_arp(const uint8_t *a, uint16_t len)
+{
+    if (len < ARP_LEN) {
+        return;
+    }
+
+    if (rd16(a) != 1 || rd16(a + 2) != ETHERTYPE_IPV4 ||
+        a[4] != 6 || a[5] != 4)
+    {
+        return;
+    }
+
+    uint16_t op = rd16(a + 6);
+
+    const uint8_t *sha = a + 8;
+    const uint8_t *spa = a + 14;
+    const uint8_t *tpa = a + 24;
+
+    static const uint8_t zero_ip[4] = { 0, 0, 0, 0 };
+
+    if (memcmp(spa, zero_ip, 4) != 0) {
+
+        if (arp_learn(spa, sha)) {
+            kprint("ARP: learned ");
+            kprint_ip(spa);
+            kprint(" -> ");
+            kprint_mac(sha);
+            kprint("\n");
+        }
+    }
+
+    if (op == ARP_OP_REQUEST && memcmp(tpa, net_ip, 4) == 0) {
+
+        kprint("ARP: request for our IP from ");
+        kprint_ip(spa);
+        kprint(", replying\n");
+
+        arp_send(ARP_OP_REPLY, sha, sha, spa);
+    }
+}
+
+
+/* ---------------------------------------------------------------- */
+/* Ethernet                                                         */
+/* ---------------------------------------------------------------- */
+
+static void handle_frame(const uint8_t *f, uint16_t len)
+{
+    if (len < ETH_HLEN) {
+        return;
+    }
+
+    uint16_t type = rd16(f + 12);
+
+    if (type == ETHERTYPE_ARP) {
+        handle_arp(f + ETH_HLEN, (uint16_t)(len - ETH_HLEN));
+    }
+
+    if (type == ETHERTYPE_IPV4) {
+        ip_input(f, len);
+    }
+}
+
+
+int net_init(void)
+{
+    if (!virtio_net_init()) {
+        return 0;
+    }
+
+    memcpy(net_mac, virtio_net_mac(), 6);
+
+    kprint("\nNET: MAC ");
+    kprint_mac(net_mac);
+    kprint("  IP ");
+    kprint_ip(net_ip);
+    kprint("  GW ");
+    kprint_ip(net_gateway);
+    kprint("\n");
+
+    return 1;
+}
+
+
+int net_poll(void)
+{
+    uint16_t len = 0;
+
+    if (!virtio_net_poll(rx_frame, sizeof(rx_frame), &len)) {
+        return 0;
+    }
+
+    handle_frame(rx_frame, len);
+
+    return 1;
+}
+
+
+int arp_resolve(const uint8_t *ip, uint8_t *mac_out, uint32_t timeout_ms)
+{
+    static const uint8_t broadcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    static const uint8_t zero_mac[6]  = { 0, 0, 0, 0, 0, 0 };
+
+    if (arp_lookup(ip, mac_out)) {
+        return 1;
+    }
+
+    const int attempts = 3;
+    uint64_t per_attempt = (uint64_t)timeout_ms * NET_TSC_PER_MS / attempts;
+
+    for (int n = 0; n < attempts; ++n) {
+
+        arp_send(ARP_OP_REQUEST, broadcast, zero_mac, ip);
+
+        uint64_t start = rdtsc();
+
+        while ((rdtsc() - start) < per_attempt) {
+
+            net_poll();
+
+            if (arp_lookup(ip, mac_out)) {
+                return 1;
+            }
+
+            cpu_pause();
+        }
+    }
+
+    return 0;
+}
+
+
+void net_run_arp_test(void)
+{
+    kprint("\nNET: ETHERNET + ARP TEST\n");
+    kprint("------------------------\n");
+
+    if (!net_init()) {
+        kprint("NET: init FAILED\n");
+        return;
+    }
+
+    static const uint8_t targets[2][4] = {
+        { 10, 0, 2, 2 },    /* gateway SLIRP */
+        { 10, 0, 2, 3 }     /* DNS SLIRP     */
+    };
+
+    for (int i = 0; i < 2; ++i) {
+
+        uint8_t mac[6];
+
+        kprint("\nARP resolve ");
+        kprint_ip(targets[i]);
+        kprint(": ");
+
+        if (arp_resolve(targets[i], mac, 1500)) {
+            kprint("OK -> ");
+            kprint_mac(mac);
+            kprint("\n");
+        } else {
+            kprint("TIMEOUT\n");
+        }
+    }
+
+    kprint("\n");
+    arp_dump_cache();
+
+    kprint("\nNET: Ethernet + ARP layer OK\n");
+}

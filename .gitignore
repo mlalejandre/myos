@@ -1,0 +1,28 @@
+# Build outputs
+build/
+isodir/
+*.o
+*.elf
+*.iso
+*.bin
+*.img
+
+# Network capture & logs
+*.pcap
+*.log
+qemu.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OS / Editor files
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp
+*~
+
+# Auto-generated structure dumps
+estructura_proyecto.txt
