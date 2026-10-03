@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "pci.h"
 #include "virtio_net.h"
+#include "virtio_blk.h"
 #include "net.h"
 #include "ip.h"
 #include "dns.h"
@@ -295,6 +296,16 @@ static void pci_scan(void)
 
 
 
+static uint64_t parse_num(const char **str) {
+    uint64_t val = 0;
+    while (**str == ' ') (*str)++;
+    while (**str >= '0' && **str <= '9') {
+        val = val * 10 + (**str - '0');
+        (*str)++;
+    }
+    return val;
+}
+
 static void parse_ip(const char *s, uint8_t *ip)
 {
     for (int i = 0; i < 4; ++i) {
@@ -419,6 +430,39 @@ static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, 
             uint32_t i = 0; while (fail_msg[i] && i < max_fb - 1) { feedback_out[i] = fail_msg[i]; i++; } feedback_out[i] = '\0';
         }
         return 1;
+    } else if (cmd_line[0] == 's' && cmd_line[1] == 'e' && cmd_line[2] == 'c' && cmd_line[3] == 't' && cmd_line[4] == 'o' && cmd_line[5] == 'r' && cmd_line[6] == '_' && cmd_line[7] == 'r') {
+        const char *p = cmd_line + 11;
+        uint64_t sec = parse_num(&p);
+        char sbuf[512];
+        if (virtio_blk_read(sec, sbuf) == 0) {
+            kprint("\n[SECTOR LBA "); kprint_dec((uint32_t)sec); kprint("]:\n");
+            for(int i=0; i<512 && sbuf[i]; i++) {
+                if (sbuf[i] >= 32 && sbuf[i] < 127) kputc(sbuf[i]);
+            }
+            kprint("\n");
+            uint32_t i = 0; while (sbuf[i] && i < max_fb - 1 && i < 511) { feedback_out[i] = sbuf[i]; i++; } feedback_out[i] = '\0';
+        } else {
+            const char *err = "Error de I/O al leer el disco duro.";
+            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+        }
+        return 1;
+    } else if (cmd_line[0] == 's' && cmd_line[1] == 'e' && cmd_line[2] == 'c' && cmd_line[3] == 't' && cmd_line[4] == 'o' && cmd_line[5] == 'r' && cmd_line[6] == '_' && cmd_line[7] == 'w') {
+        const char *p = cmd_line + 12;
+        uint64_t sec = parse_num(&p);
+        while (*p == ' ') p++;
+        char sbuf[512];
+        for (int i=0; i<512; i++) sbuf[i] = 0;
+        int bi=0;
+        while (*p && bi < 511) sbuf[bi++] = *p++;
+        if (virtio_blk_write(sec, sbuf) == 0) {
+            kprint("Sector LBA escrito en disco persistente.\n");
+            const char *succ = "Sector guardado de forma persistente en el HDD virtual.";
+            uint32_t i = 0; while (succ[i] && i < max_fb - 1) { feedback_out[i] = succ[i]; i++; } feedback_out[i] = '\0';
+        } else {
+            const char *err = "Error de I/O al escribir en disco duro.";
+            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+        }
+        return 1;
     } else if (cmd_line[0] == 'm' && cmd_line[1] == 'e' && cmd_line[2] == 'm') {
         sysinfo_print_mem();
         const char *succ = "Memoria nominal: CPU en Long Mode de 64 bits, CR3 PML4 valido, 1 GiB mapeado.";
@@ -457,6 +501,7 @@ static int is_valid_tool(const char *s)
     if (s[0] == 'c' && s[1] == 'a' && s[2] == 't' && s[3] == ' ') return 1;
     if (s[0] == 'w' && s[1] == 'r' && s[2] == 'i' && s[3] == 't' && s[4] == 'e' && s[5] == ' ') return 1;
     if (s[0] == 'r' && s[1] == 'm' && s[2] == ' ') return 1;
+    if (s[0] == 's' && s[1] == 'e' && s[2] == 'c' && s[3] == 't' && s[4] == 'o' && s[5] == 'r' && s[6] == '_') return 1;
     return 0;
 }
 
@@ -570,7 +615,7 @@ static void shell_run(void)
                 ap_len = 0;
                 const char *p_m = "MISION PRINCIPAL: '"; while (*p_m) agent_prompt_buf[ap_len++] = *p_m++;
                 const char *p_mval = mission; while (*p_mval && ap_len < sizeof(agent_prompt_buf) - 800) agent_prompt_buf[ap_len++] = *p_mval++;
-                const char *p_ctx = "'.\nContexto MYOS: Kernel bare-metal x86_64, RamFS en /.\nHerramientas: stats | mem | arp | pci | ping 10.0.2.2 | ls | cat /archivo | write /archivo texto | rm /archivo.\n";
+                const char *p_ctx = "'.\nContexto MYOS: Kernel bare-metal x86_64, RamFS en /.\nHerramientas: stats | mem | arp | pci | ping 10.0.2.2 | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 if (hist_len > 0) {
@@ -759,6 +804,7 @@ void kernel_main(void)
 
     pci_scan();
     vfs_init();
+    virtio_blk_init();
 
     net_run_llm_test();
 

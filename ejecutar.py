@@ -207,6 +207,14 @@ def main() -> int:
     # Verificar resultados
     # --------------------------------------------------------
 
+    hdd = BUILD_DIR / "hdd.img"
+    if not hdd.exists():
+        print()
+        print("Creando disco persistente (hdd.img de 16 MiB)...")
+        with open(hdd, "wb") as f:
+            f.write(b"\x00" * (16 * 1024 * 1024))
+        print("[OK] hdd.img creado")
+
     elf = BUILD_DIR / "myos.elf"
     iso = BUILD_DIR / "myos.iso"
 
@@ -261,6 +269,8 @@ def main() -> int:
         "user,id=net0",
         "-device",
         "virtio-net-pci,netdev=net0",
+        "-drive",
+        "file=build/hdd.img,format=raw,if=virtio",
         "-object",
         "filter-dump,id=dump0,netdev=net0,file=build/net.pcap",
         "-serial",

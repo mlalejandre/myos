@@ -30,7 +30,8 @@ OBJS = \
 	$(BUILD)/http.o \
 	$(BUILD)/llm.o \
 	$(BUILD)/sysinfo.o \
-	$(BUILD)/fs.o
+	$(BUILD)/fs.o \
+	$(BUILD)/virtio_blk.o
 
 HEADERS = $(wildcard src/*.h)
 
