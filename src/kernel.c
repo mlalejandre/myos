@@ -414,6 +414,13 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
 {
     while (*cmd_line == ' ') cmd_line++;
 
+    if (cmd_line[0] == 'c' && cmd_line[1] == 'r' && cmd_line[2] == 'e' && cmd_line[3] == 'a' && cmd_line[4] == 'd' && cmd_line[5] == 'o' && cmd_line[6] == 'r') {
+        kprint("MYOS - Creado por Marcos\n");
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "MYOS - Creado por Marcos");
+        return 1;
+    }
+
     if (cmd_line[0] == 'u' && cmd_line[1] == 'p' && cmd_line[2] == 't' && cmd_line[3] == 'i' && cmd_line[4] == 'm' && cmd_line[5] == 'e') {
         uint64_t ms = timer_get_uptime_ms();
         uint32_t s = (uint32_t)(ms / 1000);
