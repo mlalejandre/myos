@@ -16,6 +16,12 @@ int  llm_health(void);
 int  llm_chat(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
 int  llm_diagnose(const char *user_question, char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
 
+/* Envia prompt con grammar forzado para respuesta JSON estricta */
+int  llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms);
+
+/* Extrae un campo clave de un objeto JSON bare-metal */
+int  llm_json_get(const char *json, const char *key, char *out, uint32_t max);
+
 /* Suite de verificacion HTTP + LLM. */
 void net_run_llm_test(void);
 

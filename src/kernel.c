@@ -849,111 +849,129 @@ static void shell_run(void)
             while (*ctx) agent_prompt_buf[ap_len++] = *ctx++;
             agent_prompt_buf[ap_len] = '\0';
 
-            /* Bucle ReAct con Memoria Contextual Acumulativa */
+            /* Bucle ReAct con Salida Estructurada JSON y Grammar */
             static char history_buf[4096];
             uint32_t hist_len = 0;
             history_buf[0] = '\0';
 
             int finished = 0;
             for (int step = 1; step <= 8; ++step) {
-                /* Ensamblar prompt completo: Misión fija + Historial acumulado + Reglas */
                 ap_len = 0;
-                const char *p_m = "MISION PRINCIPAL: '"; while (*p_m) agent_prompt_buf[ap_len++] = *p_m++;
-                const char *p_mval = mission; while (*p_mval && ap_len < sizeof(agent_prompt_buf) - 800) agent_prompt_buf[ap_len++] = *p_mval++;
-                const char *p_ctx = "'.\nContexto MYOS: Kernel bare-metal x86_64, RamFS en /.\nHerramientas: stats | mem | arp | pci | ping 10.0.2.2 | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto (solo LBA>=1024) | src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto. Regla Suprema: para modificar el codigo fuente de MYOS primero localiza con 'CMD: src_grep archivo.c texto' y lee el codigo real con 'CMD: src_cat archivo.c OFFSET' (paginas de 768 bytes) para copiar el SEARCH EXACTO; despues, SIN usar CMD, responde con este formato exacto:\nFILE: src/archivo.c\n<<<<<<< SEARCH\ntexto existente exacto (debe aparecer UNA sola vez)\n=======\ntexto nuevo\n>>>>>>> REPLACE\nSolo src/*.c|h|s existentes y parches pequenos (max 8 KB). El Mac aplicara el parche y recompilara; si falla, restaurara el codigo y podras leer el error con 'CMD: sector_read 20'.\n";
+                const char *p_m = "MISION: '"; while (*p_m) agent_prompt_buf[ap_len++] = *p_m++;
+                const char *p_mval = mission; while (*p_mval && ap_len < sizeof(agent_prompt_buf) - 1200) agent_prompt_buf[ap_len++] = *p_mval++;
+                const char *p_ctx = "'.\nContexto: Kernel bare-metal x86_64, RamFS en /.\n"
+                                    "Responde SIEMPRE con un objeto JSON valido con este esquema exacto:\n"
+                                    "{\n"
+                                    "  \"thought\": \"analisis breve del paso\",\n"
+                                    "  \"action\": \"tool\" | \"patch\" | \"final\",\n"
+                                    "  \"cmd\": \"herramienta con args si action==tool\",\n"
+                                    "  \"patch\": \"bloques FILE/SEARCH/REPLACE si action==patch\",\n"
+                                    "  \"verdict\": \"dictamen final al usuario si action==final\"\n"
+                                    "}\n"
+                                    "Herramientas validas para cmd: stats | mem | arp | pci | ping <ip> | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto | src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto.\n"
+                                    "Para modificar fuentes: usa src_grep y src_cat para leer el SEARCH exacto, y luego emite action: patch.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 if (hist_len > 0) {
-                    const char *h_hdr = "Historial de acciones previas realizadas:\n";
+                    const char *h_hdr = "Historial previo:\n";
                     while (*h_hdr) agent_prompt_buf[ap_len++] = *h_hdr++;
-                    for (uint32_t h = 0; h < hist_len && ap_len < sizeof(agent_prompt_buf) - 300; ++h) {
+                    for (uint32_t h = 0; h < hist_len && ap_len < sizeof(agent_prompt_buf) - 400; ++h) {
                         agent_prompt_buf[ap_len++] = history_buf[h];
                     }
                 }
 
-                const char *p_rules = "\nInstruccion: Si requieres una herramienta responde 'CMD: <herramienta> [args]'. Si la mision pide medir/consultar y luego guardar (ej: ping y guardar), ejecuta primero la medicion y en el paso siguiente guarda los datos reales. Si ya completaste la mision, emite tu dictamen final sin CMD.";
+                const char *p_rules = "\nInstruccion: Genera el JSON correspondiente para el paso actual.";
                 while (*p_rules && ap_len < sizeof(agent_prompt_buf) - 1) agent_prompt_buf[ap_len++] = *p_rules++;
                 agent_prompt_buf[ap_len] = '\0';
 
-                if (!llm_chat(agent_prompt_buf, agent_reply_buf, sizeof(agent_reply_buf), 35000)) {
-                    serial_print("Error en la comunicacion con el agente.\n");
+                if (!llm_chat_json(agent_prompt_buf, agent_reply_buf, sizeof(agent_reply_buf), 40000)) {
+                    serial_print("Error en la comunicacion estructurada con el agente.\n");
                     finished = 1;
                     break;
                 }
 
-                {
-                    /* Parche de codigo: FILE + SEARCH/REPLACE en la respuesta, sin CMD: */
-                    const char *patch_txt = find_substr(agent_reply_buf, "FILE: src/");
-                    if (patch_txt && find_substr(patch_txt, "<<<<<<< SEARCH")) {
-                        host_submit_patch(patch_txt);
-                    }
-                }
-                char clean_cmd[512];
-                if (extract_valid_cmd(agent_reply_buf, clean_cmd, sizeof(clean_cmd))) {
+                static char act[32];
+                static char th[512];
+                static char cmd_field[512];
+                static char patch_field[4096];
+                static char verdict[4096];
+
+                act[0] = '\0'; th[0] = '\0'; cmd_field[0] = '\0'; patch_field[0] = '\0'; verdict[0] = '\0';
+
+                llm_json_get(agent_reply_buf, "action", act, sizeof(act));
+                llm_json_get(agent_reply_buf, "thought", th, sizeof(th));
+                llm_json_get(agent_reply_buf, "cmd", cmd_field, sizeof(cmd_field));
+                llm_json_get(agent_reply_buf, "patch", patch_field, sizeof(patch_field));
+                llm_json_get(agent_reply_buf, "verdict", verdict, sizeof(verdict));
+
+                if (th[0]) {
                     serial_print("\n>> [PASO ");
                     serial_put_dec((uint8_t)step);
-                    serial_print(" | ACCION IA]: Ejecutando '");
-                    serial_print(clean_cmd);
-                    serial_print("' en el hardware...\n\n");
-
-                    execute_tool_with_feedback(clean_cmd, tool_feedback_buf, sizeof(tool_feedback_buf));
-
-                    serial_print("\n>> [FEEDBACK A LA IA]: ");
-                    serial_print(tool_feedback_buf);
+                    serial_print(" | ANALISIS]: ");
+                    serial_print(th);
                     serial_print("\n");
+                }
 
-                    /* Acumular accion y resultado en el historial para los siguientes pasos */
-                    /* Historial acotado: descartar los pasos MAS ANTIGUOS, no los recientes. */
-                    while (hist_len + 1300 > sizeof(history_buf)) {
-                        const char *nx = find_substr(history_buf + 1, "\n- Paso ");
-                        if (!nx) {
-                            hist_len = 0;
-                            history_buf[0] = '\0';
-                            break;
-                        }
-                        uint32_t cut = (uint32_t)(nx - history_buf) + 1;
-                        memmove(history_buf, history_buf + cut, hist_len - cut + 1);
-                        hist_len -= cut;
-                    }
-                    const char *a1 = "- Paso "; while (*a1 && hist_len < sizeof(history_buf) - 200) history_buf[hist_len++] = *a1++;
-                    history_buf[hist_len++] = (char)('0' + step);
-                    const char *a2 = ": ejecutaste '"; while (*a2 && hist_len < sizeof(history_buf) - 200) history_buf[hist_len++] = *a2++;
-                    const char *a3 = clean_cmd; while (*a3 && hist_len < sizeof(history_buf) - 150) history_buf[hist_len++] = *a3++;
-                    const char *a4 = "' -> Resultado: '"; while (*a4 && hist_len < sizeof(history_buf) - 100) history_buf[hist_len++] = *a4++;
-                    const char *a5 = tool_feedback_buf; while (*a5 && hist_len < sizeof(history_buf) - 20) history_buf[hist_len++] = *a5++;
-                    const char *a6 = "'\n"; while (*a6 && hist_len < sizeof(history_buf) - 1) history_buf[hist_len++] = *a6++;
-                    history_buf[hist_len] = '\0';
-
-                    if (step == 8) {
-                        /* Si agota los 4 pasos, pedir conclusion final manteniendo todo el historial */
-                        ap_len = 0;
-                        const char *f_m = "MISION: '"; while (*f_m) agent_prompt_buf[ap_len++] = *f_m++;
-                        const char *f_mv = mission; while (*f_mv && ap_len < sizeof(agent_prompt_buf) - 500) agent_prompt_buf[ap_len++] = *f_mv++;
-                        const char *f_h = "'.\nHistorial completado:\n"; while (*f_h) agent_prompt_buf[ap_len++] = *f_h++;
-                        for (uint32_t h = 0; h < hist_len && ap_len < sizeof(agent_prompt_buf) - 200; ++h) agent_prompt_buf[ap_len++] = history_buf[h];
-                        const char *f_end = "\nEmite AHORA tu dictamen final y resumen de la mision para el usuario.";
-                        while (*f_end && ap_len < sizeof(agent_prompt_buf) - 1) agent_prompt_buf[ap_len++] = *f_end++;
-                        agent_prompt_buf[ap_len] = '\0';
-
-                        serial_print("\n[AGENTE AUTONOMO]: Generando dictamen final con la informacion obtenida...\n");
-                        if (llm_chat(agent_prompt_buf, agent_reply_buf, sizeof(agent_reply_buf), 35000)) {
-                            serial_print("\n[AGENTE DICTAMEN FINAL]:\n");
-                            serial_print(agent_reply_buf);
-                            serial_print("\n\n");
-                        }
+                /* 1. Accion: Parche al host */
+                if (find_substr(act, "patch") || patch_field[0] != '\0') {
+                    const char *ptext = patch_field[0] ? patch_field : agent_reply_buf;
+                    const char *pfile = find_substr(ptext, "FILE: src/");
+                    if (pfile) {
+                        serial_print("\n[AGENTE AUTONOMO]: Parche estructurado emitido. Enviando al host...\n");
+                        host_submit_patch(pfile);
                         finished = 1;
                         break;
                     }
-
-                } else {
-                    serial_print("\n[AGENTE DICTAMEN FINAL]:\n");
-                    serial_print(agent_reply_buf);
-                    serial_print("\n\n");
-                    finished = 1;
-                    break;
                 }
-            }
-            if (!finished) {
+
+                /* 2. Accion: Herramienta de hardware */
+                if (find_substr(act, "tool") || (cmd_field[0] != '\0' && !find_substr(act, "final"))) {
+                    const char *clean_cmd = cmd_field;
+                    while (*clean_cmd == ' ') clean_cmd++;
+
+                    if (is_valid_tool(clean_cmd)) {
+                        serial_print(">> [ACCION IA]: Ejecutando '");
+                        serial_print(clean_cmd);
+                        serial_print("' en el hardware...\n\n");
+
+                        execute_tool_with_feedback(clean_cmd, tool_feedback_buf, sizeof(tool_feedback_buf));
+
+                        serial_print("\n>> [FEEDBACK A LA IA]: ");
+                        serial_print(tool_feedback_buf);
+                        serial_print("\n");
+
+                        /* Recorte de historial */
+                        while (hist_len + 1300 > sizeof(history_buf)) {
+                            const char *nx = find_substr(history_buf + 1, "\n- Paso ");
+                            if (!nx) { hist_len = 0; history_buf[0] = '\0'; break; }
+                            uint32_t cut = (uint32_t)(nx - history_buf) + 1;
+                            memmove(history_buf, history_buf + cut, hist_len - cut + 1);
+                            hist_len -= cut;
+                        }
+
+                        const char *a1 = "- Paso "; while (*a1 && hist_len < sizeof(history_buf) - 200) history_buf[hist_len++] = *a1++;
+                        history_buf[hist_len++] = (char)('0' + step);
+                        const char *a2 = ": ejecutaste '"; while (*a2 && hist_len < sizeof(history_buf) - 200) history_buf[hist_len++] = *a2++;
+                        const char *a3 = clean_cmd; while (*a3 && hist_len < sizeof(history_buf) - 150) history_buf[hist_len++] = *a3++;
+                        const char *a4 = "' -> Resultado: '"; while (*a4 && hist_len < sizeof(history_buf) - 100) history_buf[hist_len++] = *a4++;
+                        const char *a5 = tool_feedback_buf; while (*a5 && hist_len < sizeof(history_buf) - 20) history_buf[hist_len++] = *a5++;
+                        const char *a6 = "'\n"; while (*a6 && hist_len < sizeof(history_buf) - 1) history_buf[hist_len++] = *a6++;
+                        history_buf[hist_len] = '\0';
+                        continue;
+                    }
+                }
+
+                /* 3. Accion: Dictamen final */
+                serial_print("\n[AGENTE DICTAMEN FINAL]:\n");
+                if (verdict[0]) {
+                    serial_print(verdict);
+                } else {
+                    serial_print(agent_reply_buf);
+                }
+                serial_print("\n\n");
+                finished = 1;
+                break;
+            }            if (!finished) {
                 serial_print("\nMision concluida.\n\n");
             }
         } else if (cmd[0] == 'l' && cmd[1] == 's' && (cmd[2] == '\0' || cmd[2] == ' ')) {
@@ -1134,9 +1152,10 @@ void kernel_main(void)
     pci_scan();
     vfs_init();
     virtio_blk_init();
-    boot_gate_check();
 
     net_run_llm_test();
+
+    boot_gate_check();
 
     vga_print_at("MYOS 0.1", 5, 36);
     vga_print_at("x86_64 kernel: LONG MODE OK", 7, 27);

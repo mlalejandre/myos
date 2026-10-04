@@ -44,15 +44,17 @@ static const char *strstr_simple(const char *haystack, const char *needle)
     return 0;
 }
 
-static int build_chat_payload(const char *prompt, char *dst, uint32_t max)
+static int build_chat_payload_mode(const char *prompt, char *dst, uint32_t max, int json_mode)
 {
     const char *prefix = 
         "{\"model\":\"nail-35b\","
         "\"messages\":["
-        "{\"role\":\"system\",\"content\":\"Eres el asistente de inteligencia artificial integrado de forma nativa en MYOS, un sistema operativo experimental x86_64 bare-metal. Responde de forma directa, precisa y sin preámbulos innecesarios.\"},"
+        "{\"role\":\"system\",\"content\":\"Eres el nucleo de inteligencia artificial de MYOS x86_64. Responde estrictamente con el formato solicitado sin preambulos.\"},"
         "{\"role\":\"user\",\"content\":\"";
 
-    const char *suffix = "\"}],\"temperature\":0.2,\"max_tokens\":1024}";
+    const char *suffix_plain = "\"}],\"temperature\":0.2,\"max_tokens\":1024}";
+    const char *suffix_json  = "\"}],\"response_format\":{\"type\":\"json_object\"},\"temperature\":0.1,\"max_tokens\":2048}";
+    const char *suffix = json_mode ? suffix_json : suffix_plain;
 
     uint32_t p = 0;
     while (*prefix && p < max - 1) {
@@ -73,7 +75,7 @@ static int build_chat_payload(const char *prompt, char *dst, uint32_t max)
             dst[p++] = '\\';
             dst[p++] = 't';
         } else if (*s == '\r' || (unsigned char)*s < 0x20) {
-            /* omitir */
+            /* omitir controles */
         } else {
             dst[p++] = *s;
         }
@@ -86,6 +88,11 @@ static int build_chat_payload(const char *prompt, char *dst, uint32_t max)
     if (p >= max) return -1;
     dst[p] = '\0';
     return (int)p;
+}
+
+static int build_chat_payload(const char *prompt, char *dst, uint32_t max)
+{
+    return build_chat_payload_mode(prompt, dst, max, 0);
 }
 
 static int extract_json_field(const char *json, const char *key, char *out, uint32_t out_max)
@@ -222,6 +229,50 @@ int llm_health(void)
     return 0;
 }
 
+
+int llm_json_get(const char *json, const char *key, char *out, uint32_t out_max)
+{
+    if (!json || !key || !out || out_max == 0) return 0;
+    char quoted_key[64];
+    if (key[0] == '"') {
+        return extract_json_field(json, key, out, out_max);
+    }
+    uint32_t klen = 0;
+    quoted_key[klen++] = '"';
+    while (key[klen - 1] && klen < sizeof(quoted_key) - 2) {
+        quoted_key[klen] = key[klen - 1];
+        klen++;
+    }
+    quoted_key[klen++] = '"';
+    quoted_key[klen] = '\0';
+    return extract_json_field(json, quoted_key, out, out_max);
+}
+
+int llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+{
+    if (build_chat_payload_mode(prompt, payload_buf, sizeof(payload_buf), 1) < 0) {
+        kprint("LLM: payload too large\n");
+        return 0;
+    }
+
+    struct http_response resp;
+    int code = http_post_json(
+        llm_ip,
+        llm_port,
+        "/v1/chat/completions",
+        payload_buf,
+        http_resp_buf,
+        sizeof(http_resp_buf),
+        &resp,
+        timeout_ms
+    );
+
+    if (code != 200 || !resp.body) {
+        return 0;
+    }
+
+    return extract_json_content(resp.body, reply_out, reply_max);
+}
 int llm_chat(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
     if (build_chat_payload(prompt, payload_buf, sizeof(payload_buf)) < 0) {
