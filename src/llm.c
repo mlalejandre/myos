@@ -14,7 +14,7 @@ char llm_last_reply[4096];
 int  llm_test_passed = 0;
 
 static char http_resp_buf[32768];
-static char payload_buf[8192];
+static char payload_buf[16384];
 
 static uint32_t my_strlen(const char *s)
 {
@@ -68,7 +68,11 @@ static int build_chat_payload(const char *prompt, char *dst, uint32_t max)
             if (p >= max - 2) return -1;
             dst[p++] = '\\';
             dst[p++] = 'n';
-        } else if (*s == '\r') {
+        } else if (*s == '\t') {
+            if (p >= max - 2) return -1;
+            dst[p++] = '\\';
+            dst[p++] = 't';
+        } else if (*s == '\r' || (unsigned char)*s < 0x20) {
             /* omitir */
         } else {
             dst[p++] = *s;

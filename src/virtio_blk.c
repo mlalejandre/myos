@@ -138,7 +138,7 @@ int virtio_blk_init(void)
     return 1;
 }
 
-static int virtio_blk_op(uint64_t sector, const void *buf, int write)
+static int virtio_blk_op(uint64_t sector, void *buf, int write)
 {
     if (!io_base) return -1;
 
@@ -196,5 +196,5 @@ int virtio_blk_read(uint64_t sector, void *buf)
 
 int virtio_blk_write(uint64_t sector, const void *buf)
 {
-    return virtio_blk_op(sector, buf, 1);
+    return virtio_blk_op(sector, (void *)buf, 1);
 }

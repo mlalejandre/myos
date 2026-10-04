@@ -16,6 +16,9 @@ int net_poll(void);
 /* Resuelve ip -> MAC (cache + ARP request). 1 = OK, 0 = timeout. */
 int arp_resolve(const uint8_t *ip, uint8_t *mac_out, uint32_t timeout_ms);
 
+/* Vuelca la tabla de cache ARP real a out. Devuelve longitud. */
+int arp_format_cache(char *out, uint32_t max);
+
 /* Prueba de la capa Ethernet/ARP. */
 void net_run_arp_test(void);
 

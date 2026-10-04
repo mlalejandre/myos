@@ -2,6 +2,7 @@
 
 #include "console.h"
 #include "net.h"
+#include "mem.h"
 #include "sysinfo.h"
 #include "virtio_net.h"
 
@@ -150,6 +151,35 @@ int sysinfo_format_telemetry(char *out_buf, uint32_t max)
     append_str(out_buf, max, &pos, " RX_pkts=");
     append_dec(out_buf, max, &pos, s.rx_packets);
     append_str(out_buf, max, &pos, "\n");
+
+    return (int)pos;
+}
+
+int sysinfo_format_mem(char *out_buf, uint32_t max)
+{
+    struct sysinfo s;
+    sysinfo_get(&s);
+
+    size_t used = 0;
+    size_t free_b = 0;
+    kheap_stats(&used, &free_b);
+
+    uint32_t pos = 0;
+    append_str(out_buf, max, &pos, "ESTADO MEMORIA/CPU: x86_64 Long Mode (1 GiB identity-mapped)\n");
+    append_str(out_buf, max, &pos, "- CR0=");
+    append_hex(out_buf, max, &pos, s.cr0, 8);
+    append_str(out_buf, max, &pos, " | CR3(PML4)=");
+    append_hex(out_buf, max, &pos, s.cr3, 8);
+    append_str(out_buf, max, &pos, " | CR4=");
+    append_hex(out_buf, max, &pos, s.cr4, 8);
+    append_str(out_buf, max, &pos, " | RSP=");
+    append_hex(out_buf, max, &pos, s.rsp, 8);
+    append_str(out_buf, max, &pos, "\n- Heap kmalloc: ");
+    append_dec(out_buf, max, &pos, (uint64_t)used);
+    append_str(out_buf, max, &pos, " bytes usados, ");
+    append_dec(out_buf, max, &pos, (uint64_t)(free_b / 1024));
+    append_str(out_buf, max, &pos, " KiB libres (total 12 MiB en 0x00400000)\n");
+    append_str(out_buf, max, &pos, "- Virtqueue 0 (RX): 0x00200000 (2 MiB fija)");
 
     return (int)pos;
 }

@@ -57,4 +57,14 @@ static inline void cpu_pause(void)
     __asm__ volatile ("pause");
 }
 
+/*
+ * Salida limpia de QEMU mediante el dispositivo isa-debug-exit
+ * (-device isa-debug-exit,iobase=0xf4,iosize=0x04).
+ * El proceso QEMU termina con codigo (code << 1) | 1.
+ */
+static inline void qemu_exit(uint8_t code)
+{
+    outb(0xF4, code);
+}
+
 #endif

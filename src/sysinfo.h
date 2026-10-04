@@ -25,5 +25,7 @@ void sysinfo_print_stats(void);
 
 /* Genera un informe compacto en formato texto dentro de out_buf */
 int sysinfo_format_telemetry(char *out_buf, uint32_t max);
+/* Genera un informe veraz de CPU, registros y heap para el agente/shell */
+int sysinfo_format_mem(char *out_buf, uint32_t max);
 
 #endif

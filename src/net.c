@@ -100,6 +100,74 @@ static int arp_learn(const uint8_t *ip, const uint8_t *mac)
 }
 
 
+
+static void append_ch(char *dst, uint32_t max, uint32_t *pos, char c)
+{
+    if (*pos + 1 < max) {
+        dst[(*pos)++] = c;
+        dst[*pos] = '\0';
+    }
+}
+
+static void append_str_arp(char *dst, uint32_t max, uint32_t *pos, const char *s)
+{
+    while (*s && *pos + 1 < max) {
+        dst[(*pos)++] = *s++;
+    }
+    dst[*pos] = '\0';
+}
+
+static void append_dec_u8(char *dst, uint32_t max, uint32_t *pos, uint8_t v)
+{
+    char tmp[4];
+    int n = 0;
+    if (v == 0) { append_ch(dst, max, pos, '0'); return; }
+    while (v) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n) append_ch(dst, max, pos, tmp[--n]);
+}
+
+static void append_hex_nibble(char *dst, uint32_t max, uint32_t *pos, uint8_t n)
+{
+    n &= 0x0F;
+    append_ch(dst, max, pos, n < 10 ? (char)('0' + n) : (char)('A' + n - 10));
+}
+
+static void append_hex_u8(char *dst, uint32_t max, uint32_t *pos, uint8_t v)
+{
+    append_hex_nibble(dst, max, pos, v >> 4);
+    append_hex_nibble(dst, max, pos, v);
+}
+
+int arp_format_cache(char *out, uint32_t max)
+{
+    uint32_t pos = 0;
+    append_str_arp(out, max, &pos, "Cache ARP en vivo:\n");
+    int count = 0;
+
+    for (int i = 0; i < ARP_CACHE_SIZE; ++i) {
+        if (!arp_cache[i].valid) continue;
+
+        count++;
+        append_str_arp(out, max, &pos, "  ");
+        for (int k = 0; k < 4; ++k) {
+            append_dec_u8(out, max, &pos, arp_cache[i].ip[k]);
+            if (k != 3) append_ch(out, max, &pos, '.');
+        }
+        append_str_arp(out, max, &pos, " -> ");
+        for (int k = 0; k < 6; ++k) {
+            append_hex_u8(out, max, &pos, arp_cache[i].mac[k]);
+            if (k != 5) append_ch(out, max, &pos, ':');
+        }
+        append_ch(out, max, &pos, '\n');
+    }
+
+    if (count == 0) {
+        append_str_arp(out, max, &pos, "  (vacia - no hay entradas resueltas aun)\n");
+    }
+
+    return (int)pos;
+}
+
 static void arp_dump_cache(void)
 {
     kprint("ARP cache:\n");
