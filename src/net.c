@@ -22,7 +22,8 @@
  * Aproximacion: bajo QEMU/TCG el TSC avanza ~1 tick por ns.
  * Se sustituira por un temporizador real (PIT/HPET) mas adelante.
  */
-#define NET_TSC_PER_MS  1000000ULL
+extern uint64_t tsc_ticks_per_ms;
+#define NET_TSC_PER_MS  tsc_ticks_per_ms
 
 
 uint8_t net_mac[6];

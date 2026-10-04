@@ -411,69 +411,68 @@ static int pci_format_scan(char *out, uint32_t max)
     return (int)pos;
 }
 
-/* Ejecuta la herramienta y captura un resumen de salida para retroalimentar a la IA */
-static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, uint32_t max_fb)
+static uint32_t max_fb_dummy = 2048;
+/* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
+static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
     while (*cmd_line == ' ') cmd_line++;
 
-    if (src_tool(cmd_line, feedback_out, max_fb)) {
+    if (src_tool(cmd_line, out_buf, max_out)) {
         return 1;
     }
 
-    if (cmd_line[0] == 'l' && cmd_line[1] == 's') {
+    if (cmd_line[0] == 'l' && cmd_line[1] == 's' && (cmd_line[2] == '\0' || cmd_line[2] == ' ')) {
         vfs_list();
-        vfs_format_list(feedback_out, max_fb);
+        vfs_format_list(out_buf, max_out);
         return 1;
-    } else if (cmd_line[0] == 'c' && cmd_line[1] == 'a' && cmd_line[2] == 't') {
-        const char *p = cmd_line + 3;
+    } else if (cmd_line[0] == 'c' && cmd_line[1] == 'a' && cmd_line[2] == 't' && cmd_line[3] == ' ') {
+        const char *p = cmd_line + 4;
         while (*p == ' ') p++;
-        char filename[48];
-        uint32_t fn_i = 0;
-        while (*p && *p != ' ' && fn_i < sizeof(filename) - 1) {
-            filename[fn_i++] = *p++;
-        }
-        filename[fn_i] = '\0';
-        char buf[1024];
-        int r = vfs_read(filename, buf, sizeof(buf));
+        char fn[48];
+        uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        char buf[2048];
+        int r = vfs_read(fn, buf, sizeof(buf));
         if (r >= 0) {
-            kprint("\n[CONTENIDO DE "); kprint(filename); kprint("]:\n");
-            kprint(buf); kprint("\n");
-            uint32_t i = 0; while (buf[i] && i < max_fb - 1) { feedback_out[i] = buf[i]; i++; } feedback_out[i] = '\0';
+            kprint("\n"); kprint(buf); kprint("\n");
+            uint32_t i = 0; while (buf[i] && i < max_out - 1) { out_buf[i] = buf[i]; i++; } out_buf[i] = '\0';
         } else {
-            kprint("Error: archivo no encontrado.\n");
+            kprint("Error: archivo no encontrado: '"); kprint(fn); kprint("'\n");
             const char *err = "Error: archivo no encontrado en RamFS.";
-            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+            uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
         }
         return 1;
-    } else if (cmd_line[0] == 'w' && cmd_line[1] == 'r' && cmd_line[2] == 'i' && cmd_line[3] == 't' && cmd_line[4] == 'e') {
-        const char *p = cmd_line + 5;
+    } else if (cmd_line[0] == 'w' && cmd_line[1] == 'r' && cmd_line[2] == 'i' && cmd_line[3] == 't' && cmd_line[4] == 'e' && cmd_line[5] == ' ') {
+        const char *p = cmd_line + 6;
         while (*p == ' ') p++;
-        char filename[48];
-        uint32_t fn_i = 0;
-        while (*p && *p != ' ' && fn_i < sizeof(filename) - 1) {
-            filename[fn_i++] = *p++;
-        }
-        filename[fn_i] = '\0';
+        char fn[48];
+        uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
         while (*p == ' ') p++;
         uint32_t tlen = 0; while (p[tlen]) tlen++;
-        vfs_write(filename, p, tlen);
-        kprint("Archivo '"); kprint(filename); kprint("' escrito con exito.\n");
-        const char *succ = "Archivo escrito correctamente en el sistema de archivos.";
-        uint32_t i = 0; while (succ[i] && i < max_fb - 1) { feedback_out[i] = succ[i]; i++; } feedback_out[i] = '\0';
+        vfs_write(fn, p, tlen);
+        kprint("Escrito y persistido en virtio-blk '"); kprint(fn); kprint("'\n");
+        const char *succ = "Archivo escrito y persistido correctamente en disco virtio-blk.";
+        uint32_t i = 0; while (succ[i] && i < max_fb_dummy - 1 && i < max_out - 1) { out_buf[i] = succ[i]; i++; } out_buf[i] = '\0';
         return 1;
     } else if (cmd_line[0] == 'r' && cmd_line[1] == 'm' && cmd_line[2] == ' ') {
         const char *fn = cmd_line + 3;
         while (*fn == ' ') fn++;
-        int r = vfs_delete(fn);
-        if (r == 0) {
-            kprint("Archivo '"); kprint(fn); kprint("' eliminado con exito.\n");
+        if (vfs_delete(fn) == 0) {
+            kprint("Eliminado '"); kprint(fn); kprint("'\n");
             const char *succ = "Archivo eliminado correctamente de RamFS.";
-            uint32_t i = 0; while (succ[i] && i < max_fb - 1) { feedback_out[i] = succ[i]; i++; } feedback_out[i] = '\0';
+            uint32_t i = 0; while (succ[i] && i < max_out - 1) { out_buf[i] = succ[i]; i++; } out_buf[i] = '\0';
         } else {
-            kprint("Error: no se pudo eliminar '"); kprint(fn); kprint("'.\n");
-            const char *err = "Error: no se pudo eliminar, el archivo no existe.";
-            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+            kprint("Error: no se pudo eliminar '"); kprint(fn); kprint("'\n");
+            const char *err = "Error: el archivo no existe.";
+            uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
         }
+        return 1;
+    } else if (cmd_line[0] == 'm' && cmd_line[1] == 'e' && cmd_line[2] == 'm') {
+        sysinfo_print_mem();
+        sysinfo_format_mem(out_buf, max_out);
         return 1;
     } else if (cmd_line[0] == 's' && cmd_line[1] == 't' && cmd_line[2] == 'a' && cmd_line[3] == 't' && cmd_line[4] == 's') {
         sysinfo_print_stats();
@@ -485,30 +484,39 @@ static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, 
         uint32_t v = s.tx_packets; if (v==0) tmp[p++]='0'; else { char b[10]; int n=0; while(v){b[n++]='0'+(v%10);v/=10;} while(n) tmp[p++]=b[--n]; }
         m = " RX_pkts="; while (*m) tmp[p++] = *m++;
         v = s.rx_packets; if (v==0) tmp[p++]='0'; else { char b[10]; int n=0; while(v){b[n++]='0'+(v%10);v/=10;} while(n) tmp[p++]=b[--n]; }
-        m = " (Conectividad y trafico activos)"; while (*m) tmp[p++] = *m++;
         tmp[p] = '\0';
-        for (uint32_t i = 0; i < p && i < max_fb - 1; ++i) feedback_out[i] = tmp[i];
-        feedback_out[p < max_fb ? p : max_fb - 1] = '\0';
+        for (uint32_t i = 0; i < p && i < max_out - 1; ++i) out_buf[i] = tmp[i];
+        out_buf[p < max_out ? p : max_out - 1] = '\0';
+        return 1;
+    } else if (cmd_line[0] == 'p' && cmd_line[1] == 'c' && cmd_line[2] == 'i') {
+        pci_scan();
+        pci_format_scan(out_buf, max_out);
+        return 1;
+    } else if (cmd_line[0] == 'a' && cmd_line[1] == 'r' && cmd_line[2] == 'p') {
+        arp_format_cache(out_buf, max_out);
+        kprint("\n"); kprint(out_buf); kprint("\n");
+        return 1;
+    } else if (cmd_line[0] == 'h' && cmd_line[1] == 'e' && cmd_line[2] == 'a' && cmd_line[3] == 'p') {
+        size_t used = 0, free_b = 0;
+        kheap_stats(&used, &free_b);
+        kprint("\nESTADO DEL HEAP (kmalloc):\n-------------------------\n");
+        kprint("Base del Heap:    0x00400000 (4 MiB)\n");
+        kprint("Alineacion:       16 bytes estricta\n");
+        kprint("Memoria Usada:    "); kprint_dec((uint32_t)used); kprint(" bytes\n");
+        kprint("Memoria Libre:    "); kprint_dec((uint32_t)(free_b / 1024)); kprint(" KiB\n");
+        kprint("Capacidad total:  12 MiB\n\n");
+        sysinfo_format_mem(out_buf, max_out);
         return 1;
     } else if (cmd_line[0] == 'p' && cmd_line[1] == 'i' && cmd_line[2] == 'n' && cmd_line[3] == 'g') {
         const char *arg = cmd_line + 4;
         while (*arg == ' ') arg++;
         uint8_t target[4];
-        if (*arg) {
-            parse_ip(arg, target);
-        } else {
-            target[0] = net_gateway[0]; target[1] = net_gateway[1];
-            target[2] = net_gateway[2]; target[3] = net_gateway[3];
-        }
+        if (*arg) parse_ip(arg, target);
+        else { target[0] = net_gateway[0]; target[1] = net_gateway[1]; target[2] = net_gateway[2]; target[3] = net_gateway[3]; }
         kprint("PING a "); kprint_ip(target); kprint("...\n");
         int r = icmp_ping(target, 1, 2000);
-        if (r == 1) {
-            const char *succ = "Ping exitoso: respuesta ICMP recibida del host objetivo.";
-            uint32_t i = 0; while (succ[i] && i < max_fb - 1) { feedback_out[i] = succ[i]; i++; } feedback_out[i] = '\0';
-        } else {
-            const char *fail_msg = "Ping fallido: tiempo de espera agotado, no hubo respuesta.";
-            uint32_t i = 0; while (fail_msg[i] && i < max_fb - 1) { feedback_out[i] = fail_msg[i]; i++; } feedback_out[i] = '\0';
-        }
+        const char *resp = (r == 1) ? "Ping exitoso: respuesta ICMP recibida." : "Ping fallido: tiempo de espera agotado.";
+        uint32_t i = 0; while (resp[i] && i < max_out - 1) { out_buf[i] = resp[i]; i++; } out_buf[i] = '\0';
         return 1;
     } else if (cmd_line[0] == 's' && cmd_line[1] == 'e' && cmd_line[2] == 'c' && cmd_line[3] == 't' && cmd_line[4] == 'o' && cmd_line[5] == 'r' && cmd_line[6] == '_' && cmd_line[7] == 'r') {
         const char *p = cmd_line + 11;
@@ -516,108 +524,66 @@ static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, 
         char sbuf[512];
         if (virtio_blk_read(sec, sbuf) == 0) {
             kprint("\n[SECTOR LBA "); kprint_dec((uint32_t)sec); kprint("]:\n");
-            for(int i=0; i<512 && sbuf[i]; i++) {
+            for (int i = 0; i < 512 && sbuf[i]; i++) {
                 if (sbuf[i] >= 32 && sbuf[i] < 127) kputc(sbuf[i]);
             }
             kprint("\n");
-            uint32_t i = 0; while (sbuf[i] && i < max_fb - 1 && i < 511) { feedback_out[i] = sbuf[i]; i++; } feedback_out[i] = '\0';
+            uint32_t i = 0; while (sbuf[i] && i < max_out - 1 && i < 511) { out_buf[i] = sbuf[i]; i++; } out_buf[i] = '\0';
         } else {
             const char *err = "Error de I/O al leer el disco duro.";
-            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+            uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
         }
         return 1;
     } else if (cmd_line[0] == 's' && cmd_line[1] == 'e' && cmd_line[2] == 'c' && cmd_line[3] == 't' && cmd_line[4] == 'o' && cmd_line[5] == 'r' && cmd_line[6] == '_' && cmd_line[7] == 'w') {
         const char *p = cmd_line + 12;
         uint64_t sec = parse_num(&p);
-
         if (sec < SECTOR_USER_MIN) {
-            kprint("Error: sectores 0-1023 reservados al sistema.\n");
-            const char *err = "Error: sector protegido (LBA < 1024 reservado al sistema). Usa LBA >= 1024.";
-            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+            kprint("Error: sectores 0-2047 reservados al sistema y RamFS persistente.\n");
+            const char *err = "Error: sector protegido (LBA < 2048 reservado). Usa LBA >= 2048.";
+            uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
             return 1;
         }
         while (*p == ' ') p++;
         char sbuf[512];
-        for (int i=0; i<512; i++) sbuf[i] = 0;
-        int bi=0;
+        memset(sbuf, 0, sizeof(sbuf));
+        int bi = 0;
         while (*p && bi < 511) sbuf[bi++] = *p++;
         if (virtio_blk_write(sec, sbuf) == 0) {
             kprint("Sector LBA escrito en disco persistente.\n");
             uint32_t pos = 0;
-            fb_puts(feedback_out, max_fb, &pos, "Sector LBA ");
-            fb_put_dec(feedback_out, max_fb, &pos, (uint32_t)sec);
-            fb_puts(feedback_out, max_fb, &pos, " escrito con exito (");
-            fb_put_dec(feedback_out, max_fb, &pos, (uint32_t)bi);
-            fb_puts(feedback_out, max_fb, &pos, " B datos). Contenido inicial: '");
-            for (int k = 0; k < bi && k < 40; ++k) {
-                fb_putc(feedback_out, max_fb, &pos, sbuf[k]);
-            }
-            if (bi > 40) fb_puts(feedback_out, max_fb, &pos, "...");
-            fb_puts(feedback_out, max_fb, &pos, "'");
+            fb_puts(out_buf, max_out, &pos, "Sector LBA ");
+            fb_put_dec(out_buf, max_out, &pos, (uint32_t)sec);
+            fb_puts(out_buf, max_out, &pos, " escrito con exito (");
+            fb_put_dec(out_buf, max_out, &pos, (uint32_t)bi);
+            fb_puts(out_buf, max_out, &pos, " B datos).");
         } else {
             const char *err = "Error de I/O al escribir en disco duro.";
-            uint32_t i = 0; while (err[i] && i < max_fb - 1) { feedback_out[i] = err[i]; i++; } feedback_out[i] = '\0';
+            uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
         }
         return 1;
-    } else if (cmd_line[0] == 'h' && cmd_line[1] == 'o' && cmd_line[2] == 's' && cmd_line[3] == 't' && cmd_line[4] == '_' && cmd_line[5] == 'p') {
-        const char *p = cmd_line + 11;
-        while (*p == ' ') p++;
-        char fn[56];
-        int fi = 0;
-        while (*p && *p != ' ' && fi < 55) fn[fi++] = *p++;
-        fn[fi] = '\0';
-        while (*p == ' ') p++;
-        
-        uint32_t clen = 0;
-        while (p[clen]) clen++;
-        
-        char mailbox[8192];
-        for(int i=0; i<8192; i++) mailbox[i] = 0;
-        
-        char *m = mailbox;
-        m[0]='P'; m[1]='A'; m[2]='T'; m[3]='C'; m[4]='H'; m[5]='v'; m[6]='0'; m[7]='1';
-        for(int i=0; i<56 && fn[i]; i++) m[8+i] = fn[i];
-        
-        m[64] = (char)(clen & 0xFF);
-        m[65] = (char)((clen >> 8) & 0xFF);
-        m[66] = (char)((clen >> 16) & 0xFF);
-        m[67] = (char)((clen >> 24) & 0xFF);
-        
-        for(uint32_t i=0; i<clen && i < 8192 - 68; i++) {
-            m[68+i] = p[i];
-        }
-        
-        /* Escribir 16 sectores (8 KiB) empezando en LBA 1 */
-        for (int s=0; s<16; s++) {
-            virtio_blk_write(1 + s, mailbox + (s * 512));
-        }
-        
-        kprint("\n\n========================================================================\n");
-        kprint("!!! INICIANDO PUENTE HOST-BRIDGE: RECOMPILACION AUTONOMA EN CURSO !!!\n");
-        kprint("========================================================================\n");
-        kprint("Escribiendo parche en el buzon de disco y deteniendo el kernel...\n");
-        
-        /* Triple Fault intencionado para cerrar QEMU limpiamente */
-        struct { uint16_t limit; uint64_t base; } __attribute__((packed)) idtr = {0, 0};
-        __asm__ volatile ("lidt %0; int3" :: "m"(idtr));
-        
+    } else if (cmd_line[0] == 'f' && cmd_line[1] == 's' && cmd_line[2] == '-' && cmd_line[3] == 's' && cmd_line[4] == 'y' && cmd_line[5] == 'n' && cmd_line[6] == 'c') {
+        vfs_sync();
+        kprint("RamFS sincronizado con exito en virtio-blk (LBA 1024).\n");
+        const char *succ = "RamFS sincronizado en disco persistente.";
+        uint32_t i = 0; while (succ[i] && i < max_out - 1) { out_buf[i] = succ[i]; i++; } out_buf[i] = '\0';
         return 1;
-    } else if (cmd_line[0] == 'm' && cmd_line[1] == 'e' && cmd_line[2] == 'm') {
-        sysinfo_print_mem();
-        sysinfo_format_mem(feedback_out, max_fb);
-        return 1;
-    } else if (cmd_line[0] == 'a' && cmd_line[1] == 'r' && cmd_line[2] == 'p') {
-        arp_format_cache(feedback_out, max_fb);
-        kprint("\n");
-        kprint(feedback_out);
-        kprint("\n");
-        return 1;
-    } else if (cmd_line[0] == 'p' && cmd_line[1] == 'c' && cmd_line[2] == 'i') {
-        pci_scan();
-        pci_format_scan(feedback_out, max_fb);
+    } else if (cmd_line[0] == 'f' && cmd_line[1] == 's' && cmd_line[2] == '-' && cmd_line[3] == 'f' && cmd_line[4] == 'o' && cmd_line[5] == 'r' && cmd_line[6] == 'm' && cmd_line[7] == 'a' && cmd_line[8] == 't') {
+        vfs_format();
+        kprint("RamFS formateado a estado de fabrica en virtio-blk.\n");
+        const char *succ = "RamFS formateado a fabrica.";
+        uint32_t i = 0; while (succ[i] && i < max_out - 1) { out_buf[i] = succ[i]; i++; } out_buf[i] = '\0';
         return 1;
     }
 
+    return 0;
+}
+
+/* Ejecuta la herramienta y captura un resumen de salida para retroalimentar a la IA */
+static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, uint32_t max_fb)
+{
+    if (dispatch_command(cmd_line, feedback_out, max_fb)) {
+        return 1;
+    }
     const char *unrec = "Comando ejecutado.";
     uint32_t i = 0; while (unrec[i] && i < max_fb - 1) { feedback_out[i] = unrec[i]; i++; } feedback_out[i] = '\0';
     return 0;
@@ -767,6 +733,11 @@ static void shell_run(void)
             continue;
         }
 
+        static char shell_buf[2048];
+        if (dispatch_command(cmd, shell_buf, sizeof(shell_buf))) {
+            continue;
+        }
+
         if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p' && (cmd[4] == '\0' || cmd[4] == ' ')) {
             serial_print("Comandos disponibles:\n");
             serial_print("Comandos disponibles:\n");
@@ -836,28 +807,31 @@ static void shell_run(void)
                 ap_len = 0;
                 const char *p_m = "MISION: '"; while (*p_m) agent_prompt_buf[ap_len++] = *p_m++;
                 const char *p_mval = mission; while (*p_mval && ap_len < sizeof(agent_prompt_buf) - 1200) agent_prompt_buf[ap_len++] = *p_mval++;
-                const char *p_ctx = "'.\nContexto: Kernel bare-metal x86_64, RamFS en /.\n"
+                const char *p_ctx = "'.\nContexto MYOS: Kernel bare-metal x86_64. Red: IP local 10.0.2.15, Gateway 10.0.2.2. RamFS en /.\n"
                                     "Responde SIEMPRE con un objeto JSON valido con este esquema exacto:\n"
                                     "{\n"
-                                    "  \"thought\": \"analisis breve del paso\",\n"
+                                    "  \"thought\": \"analisis breve de la accion a tomar\",\n"
                                     "  \"action\": \"tool\" | \"patch\" | \"final\",\n"
-                                    "  \"cmd\": \"herramienta con args si action==tool\",\n"
+                                    "  \"cmd\": \"herramienta a ejecutar si action==tool\",\n"
                                     "  \"patch\": \"bloques FILE/SEARCH/REPLACE si action==patch\",\n"
-                                    "  \"verdict\": \"dictamen final al usuario si action==final\"\n"
+                                    "  \"verdict\": \"resumen completo y detallado para el usuario si action==final\"\n"
                                     "}\n"
-                                    "Herramientas validas para cmd: stats | mem | arp | pci | ping <ip> | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto | src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto.\n"
-                                    "Para modificar fuentes: usa src_grep y src_cat para leer el SEARCH exacto, y luego emite action: patch.\n";
+                                    "Herramientas validas: stats | mem | arp | pci | ping 10.0.2.2 | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto | src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto.\n"
+                                    "Reglas de oro:\n"
+                                    "1) Si la mision pide varias tareas (ej: leer archivo Y hacer ping), ejecuta UNA herramienta por paso hasta completar TODAS.\n"
+                                    "2) Para el ping al gateway usa siempre 'ping 10.0.2.2'.\n"
+                                    "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses puntos suspensivos '...' ni respuestas vacias.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 if (hist_len > 0) {
-                    const char *h_hdr = "Historial previo:\n";
+                    const char *h_hdr = "Acciones ya realizadas anteriormente:\n";
                     while (*h_hdr) agent_prompt_buf[ap_len++] = *h_hdr++;
                     for (uint32_t h = 0; h < hist_len && ap_len < sizeof(agent_prompt_buf) - 400; ++h) {
                         agent_prompt_buf[ap_len++] = history_buf[h];
                     }
                 }
 
-                const char *p_rules = "\nInstruccion: Genera el JSON correspondiente para el paso actual.";
+                const char *p_rules = "\nInstruccion: Analiza el historial, determina que falta para completar la mision y genera el JSON.";
                 while (*p_rules && ap_len < sizeof(agent_prompt_buf) - 1) agent_prompt_buf[ap_len++] = *p_rules++;
                 agent_prompt_buf[ap_len] = '\0';
 
@@ -1123,6 +1097,9 @@ void kernel_main(void)
 {
     serial_init();
     idt_init();
+    timer_calibrate_tsc();
+    kprint("TSC: Calibrado con PIT a "); kprint_dec((uint32_t)tsc_freq_mhz);
+    kprint(" MHz ("); kprint_dec((uint32_t)tsc_ticks_per_ms); kprint(" ticks/ms)\n");
 
     clear_screen();
 

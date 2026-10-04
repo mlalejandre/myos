@@ -19,6 +19,10 @@ struct sysinfo {
     const uint8_t *gw;
 };
 
+extern uint64_t tsc_ticks_per_ms;
+extern uint64_t tsc_freq_mhz;
+uint64_t timer_calibrate_tsc(void);
+
 void sysinfo_get(struct sysinfo *info);
 void sysinfo_print_mem(void);
 void sysinfo_print_stats(void);

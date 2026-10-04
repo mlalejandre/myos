@@ -74,8 +74,9 @@ map_pd:
      * code. CR4.OSFXSR must therefore be enabled before
      * executing compiled C code that uses those instructions.
      */
+    /* CR4: PAE (bit 5), OSFXSR (bit 9), OSXMMEXCPT (bit 10) = 0x620 */
     movl %cr4, %eax
-    orl $0x220, %eax
+    orl $0x620, %eax
     movl %eax, %cr4
 
     movl $pml4_table, %eax
@@ -86,8 +87,11 @@ map_pd:
     orl $0x100, %eax
     wrmsr
 
+    /* CR0: limpiar EM (bit 2), fijar MP (bit 1), PG (bit 31), PE (bit 0) */
     movl %cr0, %eax
-    orl $0x80000000, %eax
+    andl $~(1 << 2), %eax
+    orl $(1 << 1), %eax
+    orl $0x80000001, %eax
     movl %eax, %cr0
 
     ret
@@ -111,6 +115,15 @@ gdt64_desc:
 .code64
 
 long_mode_start:
+
+    /* Cargar selectores de segmento de datos de 64 bits canonicos */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    xorw %ax, %ax
+    movw %ax, %fs
+    movw %ax, %gs
 
     movq $stack_top, %rsp
     xorq %rbp, %rbp

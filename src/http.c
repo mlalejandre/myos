@@ -6,7 +6,8 @@
 #include "mem.h"
 #include "tcp.h"
 
-#define TSC_PER_MS 1000000ULL
+extern uint64_t tsc_ticks_per_ms;
+#define TSC_PER_MS tsc_ticks_per_ms
 
 static char req_buf[8192];
 

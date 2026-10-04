@@ -26,3 +26,7 @@ __pycache__/
 
 # Auto-generated structure dumps
 estructura_proyecto.txt
+
+# Parches de la IA
+build_backup_src/
+.parche_backup/

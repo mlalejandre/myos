@@ -5,6 +5,7 @@
 #include "mem.h"
 #include "sysinfo.h"
 #include "virtio_net.h"
+#include "io.h"
 
 static inline uint64_t read_cr0(void)
 {
@@ -82,6 +83,52 @@ static int append_ip(char *dst, uint32_t max, uint32_t *pos, const uint8_t *ip)
         if (i < 3) append_str(dst, max, pos, ".");
     }
     return (*pos < max - 1);
+}
+
+
+/* ---- Calibracion PIT Canal 2 vs TSC ------------------------------ */
+uint64_t tsc_ticks_per_ms = 1000000ULL; /* Valor inicial de seguridad */
+uint64_t tsc_freq_mhz     = 1000ULL;
+
+uint64_t timer_calibrate_tsc(void)
+{
+    /* Desactivar altavoz/gate del canal 2 */
+    outb(0x61, (uint8_t)(inb(0x61) & ~0x03));
+
+    /* Canal 2, acceso LSB luego MSB, Modo 0 (one-shot), binario */
+    outb(0x43, 0xB0);
+
+    /* 11932 cuentas = 10.0001 ms contra 1.193182 MHz */
+    uint16_t count = 11932;
+    outb(0x42, (uint8_t)(count & 0xFF));
+    outb(0x42, (uint8_t)(count >> 8));
+
+    /* Iniciar conteo activando gate (bit 0) */
+    uint8_t orig = inb(0x61);
+    outb(0x61, (uint8_t)((orig & ~0x02) | 0x01));
+
+    uint64_t start = rdtsc();
+
+    /* Esperar a que el bit 5 pase a 1 (conteo terminado tras 10 ms) */
+    while ((inb(0x61) & 0x20) == 0) {
+        cpu_pause();
+    }
+
+    uint64_t end = rdtsc();
+
+    /* Desactivar gate */
+    outb(0x61, (uint8_t)(inb(0x61) & ~0x01));
+
+    uint64_t delta = end - start;
+    if (delta > 500000ULL && delta < 1000000000ULL) {
+        tsc_ticks_per_ms = delta / 10ULL;
+        tsc_freq_mhz     = tsc_ticks_per_ms / 1000ULL;
+    } else {
+        tsc_ticks_per_ms = 1000000ULL;
+        tsc_freq_mhz     = 1000ULL;
+    }
+
+    return tsc_ticks_per_ms;
 }
 
 void sysinfo_get(struct sysinfo *info)

@@ -15,7 +15,8 @@
 #define UDP_RX_BUFFER     1024
 
 /* Aproximacion bajo QEMU/TCG: ~1 tick de TSC por ns. */
-#define TSC_PER_MS        1000000ULL
+extern uint64_t tsc_ticks_per_ms;
+#define TSC_PER_MS        tsc_ticks_per_ms
 
 
 struct udp_socket {

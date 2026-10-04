@@ -25,8 +25,9 @@
 #define PING_DATA_LEN     32
 
 /* Aproximacion bajo QEMU/TCG: ~1 tick de TSC por ns. */
-#define TSC_PER_MS        1000000ULL
-#define TSC_PER_US        1000ULL
+extern uint64_t tsc_ticks_per_ms;
+#define TSC_PER_MS        tsc_ticks_per_ms
+#define TSC_PER_US        (tsc_ticks_per_ms / 1000ULL > 0 ? tsc_ticks_per_ms / 1000ULL : 1ULL)
 
 
 static const uint8_t net_netmask[4] = { 255, 255, 255, 0 };

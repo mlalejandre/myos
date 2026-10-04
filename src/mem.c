@@ -98,8 +98,12 @@ int memcmp(const void *a, const void *b, size_t n)
 struct block_header {
     size_t size;
     int is_free;
+    int pad32;
     struct block_header *next;
-};
+    uint64_t pad64;
+} __attribute__((aligned(16)));
+
+_Static_assert(sizeof(struct block_header) == 32, "block_header debe ser exactamente de 32 bytes");
 
 static struct block_header *heap_head = 0;
 static int heap_initialized = 0;
