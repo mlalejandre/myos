@@ -307,6 +307,32 @@ int srcfs_grep(const char *name, const char *pat, char *out, uint32_t max)
         return -1;
     }
 
+    /* Limpiar espacios iniciales y comillas envolventes (' o ") */
+    while (*pat == ' ' || *pat == '\t') pat++;
+
+    char clean_pat[SRCFS_LINE_MAX + 1];
+    uint32_t pat_len = 0;
+    char quote = 0;
+    if (*pat == '\'' || *pat == '"') {
+        quote = *pat++;
+    }
+
+    while (*pat && pat_len < sizeof(clean_pat) - 1) {
+        if (quote && *pat == quote) {
+            break;
+        }
+        clean_pat[pat_len++] = *pat++;
+    }
+    clean_pat[pat_len] = '\0';
+
+    if (!quote) {
+        while (pat_len > 0 && (clean_pat[pat_len - 1] == ' ' || clean_pat[pat_len - 1] == '\t' ||
+                               clean_pat[pat_len - 1] == '\r' || clean_pat[pat_len - 1] == '\n')) {
+            clean_pat[--pat_len] = '\0';
+        }
+    }
+    pat = clean_pat;
+
     if (!*pat) {
         out_str(out, max, &pos, "Uso: src_grep archivo.c texto");
         return -1;
@@ -391,8 +417,16 @@ int src_tool(const char *cmd, char *out, uint32_t max)
         char name[SRCFS_NAME_MAX];
         uint32_t n = 0;
 
-        while (*p && *p != ' ' && n < sizeof(name) - 1) {
-            name[n++] = *p++;
+        if (*p == '\'' || *p == '"') {
+            char q = *p++;
+            while (*p && *p != q && n < sizeof(name) - 1) {
+                name[n++] = *p++;
+            }
+            if (*p == q) p++;
+        } else {
+            while (*p && *p != ' ' && n < sizeof(name) - 1) {
+                name[n++] = *p++;
+            }
         }
 
         name[n] = '\0';

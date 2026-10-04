@@ -816,21 +816,33 @@ static void agent_state_load(void)
         fb_putc(history_buf, sizeof(history_buf), &pos, '\n');
     }
 
-    fb_puts(history_buf, sizeof(history_buf), &pos,
-            "- Paso R: el kernel se reinicio tras tu parche. Resultado segun el host: ");
-
     if (virtio_blk_read(RESULT_LBA, res) == 0 && res[0] != 0) {
         res[511] = 0;
         for (int i = 0; res[i]; ++i) {
             if (res[i] < 32 || res[i] > 126) res[i] = ' ';
         }
-        fb_puts(history_buf, sizeof(history_buf), &pos, (const char *)res);
     } else {
-        fb_puts(history_buf, sizeof(history_buf), &pos, "(el host no dejo resultado)");
+        res[0] = '\0';
     }
 
-    fb_puts(history_buf, sizeof(history_buf), &pos,
-            ". Si fue aceptado, verifica el cambio con src_grep/src_cat y concluye con action final.\n");
+    if (find_substr((const char *)res, "BOOT_OK")) {
+        fb_puts(history_buf, sizeof(history_buf), &pos,
+                "- Paso R (Reinicio): El host APROBO y COMPILO tu parche con exito (BOOT_OK).\n"
+                "  [DIRECTIVA]: Tu parche ya esta aplicado en el kernel. NO vuelvas a enviar un parche.\n"
+                "  Verifica el resultado (con src_grep o src_cat) y concluye la mision emitiendo action=\"final\" con tu verdict.\n");
+    } else if (find_substr((const char *)res, "FAILED") || find_substr((const char *)res, "REJECTED")) {
+        fb_puts(history_buf, sizeof(history_buf), &pos,
+                "- Paso R (Reinicio): El parche NO fue aceptado o fallo la compilacion/arranque (rollback aplicado).\n"
+                "  [DETALLE DEL HOST]: ");
+        fb_puts(history_buf, sizeof(history_buf), &pos, (const char *)res);
+        fb_puts(history_buf, sizeof(history_buf), &pos,
+                "\n  [DIRECTIVA]: Analiza el error anterior, corrige tu SEARCH/REPLACE y vuelve a intentarlo.\n");
+    } else {
+        fb_puts(history_buf, sizeof(history_buf), &pos,
+                "- Paso R (Reinicio): El kernel se reinicio tras el parche. Resultado: ");
+        fb_puts(history_buf, sizeof(history_buf), &pos, res[0] ? (const char *)res : "(sin resultado del host)");
+        fb_puts(history_buf, sizeof(history_buf), &pos, "\n");
+    }
 
     agent_patch_attempts = n;
     agent_resume_pending = 1;
@@ -1006,7 +1018,8 @@ static void shell_run(void)
                                     "1) Si la mision pide varias tareas (ej: leer archivo Y hacer ping), ejecuta UNA herramienta por paso hasta completar TODAS.\n"
                                     "2) Para el ping al gateway usa siempre 'ping 10.0.2.2'.\n"
                                     "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses puntos suspensivos '...' ni respuestas vacias.\n"
-                                    "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n";
+                                    "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n"
+                                    "5) Si el historial indica que tu parche fue aprobado (BOOT_OK), NO envies mas parches: comprueba el archivo y concluye con action=\"final\".\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 if (hist_len > 0) {
@@ -1089,6 +1102,11 @@ static void shell_run(void)
                             serial_print("\n[AGENTE AUTONOMO]: limite de parches por mision alcanzado; no se envia.\n");
                             finished = 1;
                             break;
+                        }
+if (hist_len + 400 < sizeof(history_buf)) {
+                            fb_puts(history_buf, sizeof(history_buf), &hist_len, "- Paso ");
+                            fb_putc(history_buf, sizeof(history_buf), &hist_len, (char)('0' + step));
+                            fb_puts(history_buf, sizeof(history_buf), &hist_len, ": emitiste un parche estructurado para modificar el codigo.\n");
                         }
                         agent_state_save(mission, history_buf, hist_len);
                         host_submit_patch(pfile);
