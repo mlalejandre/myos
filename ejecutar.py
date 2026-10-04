@@ -19,6 +19,7 @@ import difflib
 import re
 import shutil
 import subprocess
+import time
 import sys
 
 import llm_server
@@ -230,11 +231,16 @@ def apply_changes(changes) -> None:
     shutil.rmtree(BACKUP_DIR, ignore_errors=True)
     shutil.copytree(SRC_DIR, BACKUP_DIR)
     for p, (_, new) in changes.items():
+        # Invalidar inodo en macOS VirtioFS borrando antes de escribir
+        p.unlink(missing_ok=True)
         p.write_text(new, encoding="utf-8")
+    # Pausa de sincronizacion para que la cache de Docker en macOS actualice st_size
+    time.sleep(0.6)
 
 
 def restore_src() -> None:
     shutil.copytree(BACKUP_DIR, SRC_DIR, dirs_exist_ok=True)
+    time.sleep(0.4)
 
 
 def handle_mailbox(approve: bool) -> bool | None:

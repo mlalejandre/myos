@@ -411,6 +411,8 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
 {
     if (cmd_line[0] == 'c' && cmd_line[1] == 'l' && cmd_line[2] == 's') {
         console_clear();
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "Pantalla borrada con exito.");
         return 1;
     }
 
@@ -732,30 +734,16 @@ static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, 
 
 static int is_valid_tool(const char *s)
 {
-    /* Rechazar categoricamente cualquier orden que contenga marcadores '<' o '>' de plantilla */
+    if (!s) return 0;
+    while (*s == ' ') s++;
+    if (*s == '\0') return 0;
+
+    /* Rechazar unicamente marcadores de plantilla '<...>' */
     for (const char *chk = s; *chk && *chk != '\n' && *chk != '\r'; chk++) {
         if (*chk == '<' || *chk == '>') return 0;
     }
 
-    if (s[0] == 's' && s[1] == 't' && s[2] == 'a' && s[3] == 't' && s[4] == 's') return 1;
-    if (s[0] == 'm' && s[1] == 'e' && s[2] == 'm') return 1;
-    if (s[0] == 'a' && s[1] == 'r' && s[2] == 'p') return 1;
-    if (s[0] == 'p' && s[1] == 'c' && s[2] == 'i') return 1;
-    if (s[0] == 'p' && s[1] == 'i' && s[2] == 'n' && s[3] == 'g') return 1;
-    if (s[0] == 'l' && s[1] == 's') return 1;
-    if (s[0] == 'c' && s[1] == 'a' && s[2] == 't' && s[3] == ' ') return 1;
-    if (s[0] == 'w' && s[1] == 'r' && s[2] == 'i' && s[3] == 't' && s[4] == 'e' && s[5] == ' ') return 1;
-    if (s[0] == 'r' && s[1] == 'm' && s[2] == ' ') return 1;
-    if (s[0] == 'h' && s[1] == 'o' && s[2] == 's' && s[3] == 't' && s[4] == '_' && s[5] == 'p') return 1;
-    if (s[0] == 's' && s[1] == 'e' && s[2] == 'c' && s[3] == 't' && s[4] == 'o' && s[5] == 'r' && s[6] == '_') return 1;
-    if (s[0] == 's' && s[1] == 'r' && s[2] == 'c' && s[3] == '_') return 1;
-    if (s[0] == 't' && s[1] == 'e' && s[2] == 's' && s[3] == 't') return 1;
-    if (s[0] == 'u' && s[1] == 'p' && s[2] == 't' && s[3] == 'i' && s[4] == 'm' && s[5] == 'e') return 1;
-    if (s[0] == 's' && s[1] == 'l' && s[2] == 'e' && s[3] == 'e' && s[4] == 'p' && s[5] == ' ') return 1;
-    if (s[0] == 'd' && s[1] == 'n' && s[2] == 's' && s[3] == ' ') return 1;
-    if (s[0] == 'c' && s[1] == 'u' && s[2] == 'r' && s[3] == 'l' && s[4] == ' ') return 1;
-
-    return 0;
+    return 1;
 }
 
 
@@ -1073,7 +1061,7 @@ static void shell_run(void)
 
         if (agent_resume_pending == 1) {
             /* Reanudar la mision tras un reinicio por parche. */
-            const char *pre = "agent ";
+            const char *pre = "myos ";
             uint32_t ci = 0;
             while (*pre) cmd[ci++] = *pre++;
             for (uint32_t k = 0; agent_resume_mission[k] && ci < sizeof(cmd) - 1; ++k) {
@@ -1120,7 +1108,7 @@ static void shell_run(void)
             serial_print("  health               - Verifica estado del servidor LLM\n");
             serial_print("  llm <mensaje>        - Consulta general a nail-35b\n");
             serial_print("  llm-diag [pregunta]  - Telemetria + Diagnostico del kernel por IA\n");
-            serial_print("  agent <mision>       - Agente autonomo con ejecucion de herramientas\n");
+            serial_print("  myos <mision>        - Agente autonomo IA (alias: agent)\n");
             serial_print("  heap                 - Estado de la memoria dinamica kmalloc\n");
             serial_print("  ping <ip>            - Envia ICMP echo a una direccion IPv4\n");
             serial_print("  ls                   - Lista los archivos del RamFS\n");
@@ -1152,11 +1140,12 @@ static void shell_run(void)
             } else {
                 serial_print("Error al solicitar diagnostico al LLM.\n");
             }
-} else if (cmd[0] == 'a' && cmd[1] == 'g' && cmd[2] == 'e' && cmd[3] == 'n' && cmd[4] == 't' && cmd[5] == ' ') {
-            const char *mission = cmd + 6;
+} else if ((cmd[0] == 'm' && cmd[1] == 'y' && cmd[2] == 'o' && cmd[3] == 's' && cmd[4] == ' ') ||
+               (cmd[0] == 'a' && cmd[1] == 'g' && cmd[2] == 'e' && cmd[3] == 'n' && cmd[4] == 't' && cmd[5] == ' ')) {
+            const char *mission = (cmd[0] == 'm') ? (cmd + 5) : (cmd + 6);
             while (*mission == ' ') mission++;
             if (*mission == '\0') {
-                serial_print("Uso: agent <mision en lenguaje natural>\n");
+                serial_print("Uso: myos <mision en lenguaje natural>\n");
                 continue;
             }
 
