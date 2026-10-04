@@ -1102,6 +1102,7 @@ static void shell_run(void)
         if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p' && (cmd[4] == '\0' || cmd[4] == ' ')) {
             serial_print("Comandos disponibles:\n");
             serial_print("  help                 - Muestra esta ayuda\n");
+            serial_print("  creador              - Muestra informacion del creador de MYOS\n");
             serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
             serial_print("  uptime               - Tiempo de ejecucion del kernel\n");
             serial_print("  sleep <ms>           - Suspende la CPU con HLT durante N milisegundos\n");
