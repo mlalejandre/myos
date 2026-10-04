@@ -49,11 +49,11 @@ static int build_chat_payload_mode(const char *prompt, char *dst, uint32_t max, 
     const char *prefix = 
         "{\"model\":\"nail-35b\","
         "\"messages\":["
-        "{\"role\":\"system\",\"content\":\"Eres el nucleo de inteligencia artificial de MYOS x86_64. Responde estrictamente con el formato solicitado sin preambulos.\"},"
+        "{\"role\":\"system\",\"content\":\"Eres el nucleo de inteligencia artificial de MYOS x86_64. No uses bloques de pensamiento <think>. Responde estrictamente con el objeto JSON solicitado sin preambulos.\"},"
         "{\"role\":\"user\",\"content\":\"";
 
-    const char *suffix_plain = "\"}],\"temperature\":0.2,\"max_tokens\":1024}";
-    const char *suffix_json  = "\"}],\"response_format\":{\"type\":\"json_object\"},\"temperature\":0.1,\"max_tokens\":2048}";
+    const char *suffix_plain = "\"}],\"temperature\":0.2,\"max_tokens\":2048}";
+    const char *suffix_json  = "\"}],\"response_format\":{\"type\":\"json_object\"},\"chat_template_kwargs\":{\"enable_thinking\":false},\"temperature\":0.1,\"max_tokens\":4096}";
     const char *suffix = json_mode ? suffix_json : suffix_plain;
 
     uint32_t p = 0;

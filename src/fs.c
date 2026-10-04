@@ -108,6 +108,30 @@ static int load_file_from_disk(int i)
         }
     }
 
+    /* No aceptar estructuras de disco que puedan provocar lecturas/escrituras
+       fuera de los limites del VFS o cadenas no terminadas. */
+    if (entry.used > 1) {
+        return -1;
+    }
+    if (entry.size >= FS_DATA_MAX) {
+        return -1;
+    }
+    if (entry.used) {
+        int name_terminated = 0;
+        for (uint32_t n = 0; n < FS_NAME_MAX; ++n) {
+            if (entry.name[n] == '\0') {
+                name_terminated = 1;
+                break;
+            }
+        }
+        if (!name_terminated || entry.name[0] == '\0') {
+            return -1;
+        }
+        if (entry.size > 0 && entry.data[entry.size] != '\0') {
+            return -1;
+        }
+    }
+
     memcpy(files[i].name, entry.name, FS_NAME_MAX);
     files[i].size = entry.size;
     files[i].used = entry.used;
@@ -126,13 +150,25 @@ int vfs_sync(void)
     uint32_t used_count = 0;
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         if (files[i].used) {
+            if (files[i].size >= FS_DATA_MAX) {
+                kprint("VFS: entrada invalida en memoria; sync abortada.\n");
+                return -1;
+            }
             used_count++;
-            sync_file_to_disk(i);
+            if (sync_file_to_disk(i) != 0) {
+                kprint("VFS: error de I/O sincronizando archivo; sync abortada.\n");
+                return -1;
+            }
         }
     }
     sb.num_files = used_count;
 
-    return virtio_blk_write(FS_SUPER_LBA, &sb);
+    if (virtio_blk_write(FS_SUPER_LBA, &sb) != 0) {
+        kprint("VFS: error de I/O escribiendo superbloque.\n");
+        return -1;
+    }
+
+    return 0;
 }
 
 static int vfs_create_internal(const char *name, const char *initial_data)
@@ -198,17 +234,31 @@ void vfs_init(void)
     fs_initialized = 1;
 
     struct fs_superblock sb;
-    if (virtio_blk_read(FS_SUPER_LBA, &sb) == 0 && memcmp(sb.magic, "MYOSFS01", 8) == 0) {
+    if (virtio_blk_read(FS_SUPER_LBA, &sb) == 0 &&
+        memcmp(sb.magic, "MYOSFS01", 8) == 0 &&
+        sb.version == 1 &&
+        sb.max_files == FS_MAX_FILES &&
+        sb.num_files <= FS_MAX_FILES) {
         kprint("VFS: Sistema de archivos persistente detectado (MYOSFS01)\n");
         int loaded = 0;
+        int invalid = 0;
         for (int i = 0; i < FS_MAX_FILES; ++i) {
-            if (load_file_from_disk(i) == 0 && files[i].used) {
+            int r = load_file_from_disk(i);
+            if (r == 0 && files[i].used) {
                 loaded++;
+            } else if (r != 0) {
+                invalid++;
+                files[i].used = 0;
+                files[i].size = 0;
+                files[i].name[0] = '\0';
             }
         }
         kprint("VFS: ");
         kprint_dec((uint32_t)loaded);
         kprint(" archivos cargados desde virtio-blk.\n");
+        if ((uint32_t)loaded != sb.num_files || invalid != 0) {
+            kprint("VFS: AVISO: inconsistencias detectadas; archivos invalidos omitidos.\n");
+        }
         return;
     }
 
@@ -220,8 +270,8 @@ int vfs_create(const char *name, const char *initial_data)
 {
     if (!fs_initialized) vfs_init();
     int r = vfs_create_internal(name, initial_data);
-    if (r == 0) {
-        vfs_sync();
+    if (r == 0 && vfs_sync() != 0) {
+        return -1;
     }
     return r;
 }
@@ -238,8 +288,9 @@ int vfs_write(const char *name, const char *data, uint32_t len)
             }
             files[i].data[len] = '\0';
             files[i].size = len;
-            sync_file_to_disk(i);
-            vfs_sync();
+            if (vfs_sync() != 0) {
+                return -1;
+            }
             return (int)len;
         }
     }
@@ -274,8 +325,9 @@ int vfs_delete(const char *name)
             files[i].used = 0;
             files[i].size = 0;
             files[i].name[0] = '\0';
-            sync_file_to_disk(i);
-            vfs_sync();
+            if (sync_file_to_disk(i) != 0 || vfs_sync() != 0) {
+                return -1;
+            }
             return 0;
         }
     }

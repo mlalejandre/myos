@@ -412,10 +412,17 @@ static int pci_format_scan(char *out, uint32_t max)
 }
 
 static uint32_t max_fb_dummy = 2048;
+static int kernel_run_test_suite(char *out_buf, uint32_t max_out);
+
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
     while (*cmd_line == ' ') cmd_line++;
+
+    if (cmd_line[0] == 't' && cmd_line[1] == 'e' && cmd_line[2] == 's' && cmd_line[3] == 't') {
+        kernel_run_test_suite(out_buf, max_out);
+        return 1;
+    }
 
     if (src_tool(cmd_line, out_buf, max_out)) {
         return 1;
@@ -608,6 +615,7 @@ static int is_valid_tool(const char *s)
     if (s[0] == 'h' && s[1] == 'o' && s[2] == 's' && s[3] == 't' && s[4] == '_' && s[5] == 'p') return 1;
     if (s[0] == 's' && s[1] == 'e' && s[2] == 'c' && s[3] == 't' && s[4] == 'o' && s[5] == 'r' && s[6] == '_') return 1;
     if (s[0] == 's' && s[1] == 'r' && s[2] == 'c' && s[3] == '_') return 1;
+    if (s[0] == 't' && s[1] == 'e' && s[2] == 's' && s[3] == 't') return 1;
     return 0;
 }
 
@@ -742,6 +750,8 @@ static void shell_run(void)
             serial_print("Comandos disponibles:\n");
             serial_print("Comandos disponibles:\n");
             serial_print("  help                 - Muestra esta ayuda\n");
+            serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
+            serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
             serial_print("  health               - Verifica estado del servidor LLM\n");
             serial_print("  llm <mensaje>        - Consulta general a nail-35b\n");
             serial_print("  llm-diag [pregunta]  - Telemetria + Diagnostico del kernel por IA\n");
@@ -787,21 +797,14 @@ static void shell_run(void)
 
             serial_print("\n[AGENTE AUTONOMO]: Iniciando mision multi-paso...\n");
 
-            /* Paso inicial: preparar contexto y mision */
-            uint32_t ap_len = 0;
-            const char *instr = "Mision: '";
-            while (*instr) agent_prompt_buf[ap_len++] = *instr++;
-            const char *m = mission;
-            while (*m && ap_len < sizeof(agent_prompt_buf) - 500) agent_prompt_buf[ap_len++] = *m++;
-            const char *ctx = "'. Contexto MYOS: Kernel x86_64 bare-metal con RamFS en /. Herramientas: stats, mem, arp, pci, ping 10.0.2.2, ls, cat /arch, write /arch texto, rm /arch. Reglas obligatorias: 1) Si la mision requiere medir o consultar antes de guardar (ej: ping y luego write), ejecuta SIEMPRE primero la herramienta de medicion (ping/stats) y en el siguiente paso guarda los datos con write. 2) Para ejecutar usa 'CMD: <herramienta>'. 3) Al concluir responde con tu dictamen final sin CMD.";
-            while (*ctx) agent_prompt_buf[ap_len++] = *ctx++;
-            agent_prompt_buf[ap_len] = '\0';
+            /* Paso inicial: bucle ReAct multi-paso */
 
             /* Bucle ReAct con Salida Estructurada JSON y Grammar */
             static char history_buf[4096];
             uint32_t hist_len = 0;
             history_buf[0] = '\0';
 
+            uint32_t ap_len = 0;
             int finished = 0;
             for (int step = 1; step <= 8; ++step) {
                 ap_len = 0;
@@ -912,16 +915,18 @@ static void shell_run(void)
                     }
                 }
 
-                /* 3. Accion: Dictamen final */
-                serial_print("\n[AGENTE DICTAMEN FINAL]:\n");
-                if (verdict[0]) {
-                    serial_print(verdict);
-                } else {
-                    serial_print(agent_reply_buf);
+                /* 3. Accion: Dictamen final o aviso de respuesta incompleta */
+                if (find_substr(act, "final") || verdict[0] != '\0') {
+                    serial_print("\n[AGENTE DICTAMEN FINAL]:\n");
+                    serial_print(verdict[0] ? verdict : agent_reply_buf);
+                    serial_print("\n\n");
+                    finished = 1;
+                    break;
                 }
-                serial_print("\n\n");
-                finished = 1;
-                break;
+
+                serial_print("\n[AVISO IA]: Respuesta incompleta o no estructurada recibida del modelo:\n");
+                serial_print(agent_reply_buf);
+                serial_print("\nReintentando paso...\n");
             }            if (!finished) {
                 serial_print("\nMision concluida.\n\n");
             }
@@ -1052,6 +1057,120 @@ static void shell_run(void)
 }
 
 
+/* ---- Suite de Auto-Test de No Regresion (Bare-Metal) ------------- */
+static int kernel_run_test_suite(char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0;
+    int failed = 0;
+
+    kprint("\n============================================================\n");
+    kprint("MYOS BARE-METAL TEST SUITE (Verificacion de No Regresion)\n");
+    kprint("============================================================\n");
+    fb_puts(out_buf, max_out, &pos, "[SUITE DE AUTO-TEST MYOS]:\n");
+
+    /* 1. Test de Heap y Alineacion 16-bytes (kmalloc/kfree) */
+    kprint("[TEST 1/5] Heap Allocator & Alineacion 16-bytes... ");
+    void *p1 = kmalloc(64);
+    void *p2 = kmalloc(256);
+    void *p3 = kmalloc(1024);
+    if (!p1 || !p2 || !p3 ||
+        ((uintptr_t)p1 & 0x0F) != 0 ||
+        ((uintptr_t)p2 & 0x0F) != 0 ||
+        ((uintptr_t)p3 & 0x0F) != 0) {
+        kprint("FALLO (alloc o desalineacion)\n");
+        fb_puts(out_buf, max_out, &pos, "- Heap kmalloc: FALLO\n");
+        failed++;
+    } else {
+        memset(p1, 0xAA, 64);
+        memset(p2, 0x55, 256);
+        memset(p3, 0x33, 1024);
+        uint8_t *b1 = (uint8_t *)p1;
+        uint8_t *b2 = (uint8_t *)p2;
+        int canaries_ok = (b1[0] == 0xAA && b1[63] == 0xAA && b2[0] == 0x55 && b2[255] == 0x55);
+        kfree(p2);
+        kfree(p1);
+        kfree(p3);
+        if (canaries_ok) {
+            kprint("OK (16-byte align & canaries OK)\n");
+            fb_puts(out_buf, max_out, &pos, "- Heap kmalloc: OK\n");
+        } else {
+            kprint("FALLO (corrupcion de canario)\n");
+            fb_puts(out_buf, max_out, &pos, "- Heap kmalloc: FALLO CANARIO\n");
+            failed++;
+        }
+    }
+
+    /* 2. Test de Disco VirtIO-BLK (Lectura/Escritura LBA 2048) */
+    kprint("[TEST 2/5] Disco VirtIO-BLK (Lectura/Escritura LBA 2048)... ");
+    static uint8_t sec_w[512] __attribute__((aligned(16)));
+    static uint8_t sec_r[512] __attribute__((aligned(16)));
+    for (int i = 0; i < 512; ++i) sec_w[i] = (uint8_t)(i ^ 0x5A);
+    memcpy(sec_w, "MYOS_SELFTEST_INTEGRITY_SECTOR_2048", 35);
+    if (virtio_blk_write(2048, sec_w) != 0 ||
+        virtio_blk_read(2048, sec_r) != 0 ||
+        memcmp(sec_w, sec_r, 512) != 0) {
+        kprint("FALLO de I/O en virtio-blk\n");
+        fb_puts(out_buf, max_out, &pos, "- VirtIO-BLK: FALLO\n");
+        failed++;
+    } else {
+        kprint("OK (LBA 2048 verificado)\n");
+        fb_puts(out_buf, max_out, &pos, "- VirtIO-BLK: OK\n");
+    }
+
+    /* 3. Test de Sistema de Archivos Persistente (RamFS / MYOSFS01) */
+    kprint("[TEST 3/5] Sistema de Archivos RamFS (Ciclo CRUD y sync)... ");
+    const char *tfile = "/.test_canary.tmp";
+    const char *tdata = "MYOS_FS_CANARY_VALIDATION_STRING";
+    char rdata[64];
+    memset(rdata, 0, sizeof(rdata));
+    int w_res = vfs_write(tfile, tdata, 32);
+    int r_res = vfs_read(tfile, rdata, sizeof(rdata));
+    int d_res = vfs_delete(tfile);
+    int r2_res = vfs_read(tfile, rdata, sizeof(rdata));
+    if (w_res > 0 && r_res > 0 && memcmp(rdata, tdata, 32) == 0 && d_res == 0 && r2_res < 0) {
+        kprint("OK (crear, leer, borrar, sync OK)\n");
+        fb_puts(out_buf, max_out, &pos, "- RamFS MYOSFS01: OK\n");
+    } else {
+        kprint("FALLO en operaciones VFS\n");
+        fb_puts(out_buf, max_out, &pos, "- RamFS MYOSFS01: FALLO\n");
+        failed++;
+    }
+
+    /* 4. Test de Red Bare-Metal (ARP + Ping Gateway 10.0.2.2) */
+    kprint("[TEST 4/5] Pila de Red (ARP + ICMP Ping Gateway 10.0.2.2)... ");
+    int p_res = icmp_ping(net_gateway, 777, 1200);
+    if (p_res == 1) {
+        kprint("OK (Echo Reply recibido)\n");
+        fb_puts(out_buf, max_out, &pos, "- Red (ICMP Gateway): OK\n");
+    } else {
+        kprint("FALLO (Gateway no responde)\n");
+        fb_puts(out_buf, max_out, &pos, "- Red (ICMP Gateway): FALLO\n");
+        failed++;
+    }
+
+    /* 5. Test de Enlace HTTP LLM Local (/health) */
+    kprint("[TEST 5/5] Enlace HTTP llama-server (/health)... ");
+    if (llm_health()) {
+        kprint("OK (HTTP 200 OK)\n");
+        fb_puts(out_buf, max_out, &pos, "- LLM Server: OK\n");
+    } else {
+        kprint("FALLO (Servidor LLM inalcanzable)\n");
+        fb_puts(out_buf, max_out, &pos, "- LLM Server: FALLO\n");
+        failed++;
+    }
+
+    kprint("============================================================\n");
+    if (failed == 0) {
+        kprint("RESUMEN: TODOS LOS COMPONENTES OPERATIVOS (5/5 PASADOS)\n\n");
+        fb_puts(out_buf, max_out, &pos, "Resultado: 5/5 pruebas superadas. Sistema robusto.");
+        return 0;
+    } else {
+        kprint("RESUMEN: DETECTADOS FALLOS CRITICOS EN EL KERNEL.\n\n");
+        fb_puts(out_buf, max_out, &pos, "Resultado: FALLOS DETECTADOS en la suite de auto-test.");
+        return -1;
+    }
+}
+
 /* ---- Puerta de Arranque (Canary Boot) ----------------------------- */
 #define BOOT_GATE_LBA 24
 
@@ -1075,9 +1194,11 @@ static void boot_gate_check(void)
     memset(gate_sec, 0, sizeof(gate_sec));
     virtio_blk_write(BOOT_GATE_LBA, gate_sec);
 
-    if (!llm_health()) {
-        kprint("[PUERTA DE ARRANQUE] ERROR: /health no responde.\n");
-        qemu_exit(0x22);
+    /* Ejecutar Suite Completa de Auto-Test de No-Regresion */
+    static char gate_report[512];
+    if (kernel_run_test_suite(gate_report, sizeof(gate_report)) != 0) {
+        kprint("[PUERTA DE ARRANQUE] ERROR: La suite de auto-test fallo. ABORTANDO KERNEL.\n");
+        qemu_exit(0x22); /* Dispara rollback del host */
         return;
     }
 
