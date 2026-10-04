@@ -33,10 +33,7 @@ static void serial_init(void)
     outb(COM1 + 4, 0x0B);
 }
 
-static int serial_ready(void)
-{
-    return (inb(COM1 + 5) & 0x20) != 0;
-}
+/* serial_ready unificado en console.c */
 
 static void serial_putc(char c)
 {
@@ -723,7 +720,7 @@ static int execute_tool_with_feedback(const char *cmd_line, char *feedback_out, 
     if (dispatch_command(cmd_line, feedback_out, max_fb)) {
         return 1;
     }
-    const char *unrec = "Comando ejecutado.";
+    const char *unrec = "Comando no implementado en el kernel o no reconocido.";
     uint32_t i = 0; while (unrec[i] && i < max_fb - 1) { feedback_out[i] = unrec[i]; i++; } feedback_out[i] = '\0';
     return 0;
 }
@@ -1199,7 +1196,7 @@ static void shell_run(void)
                                     "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses respuestas vacias ni '...'.\n"
                                     "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n"
                                     "5) Si el historial indica que tu parche fue aprobado (BOOT_OK), NO envies mas parches: comprueba el archivo y concluye con action=\"final\".\n"
-                                    "6) MEMORIA A LARGO PLAZO: Para recordar aprendizajes permanentes entre misiones, escribe de forma concisa con 'write' en /etc/mem_user.txt (usuario/identidad), /etc/mem_hw.txt (red/hardware) o /etc/mem_kernel.txt (codigo).\n";
+                                    "6) AUTO-EVOLUCION Y MEMORIA: Si creas o modificas una herramienta o comando, anota SIEMPRE con 'write' en /etc/mem_kernel.txt el nombre del comando y que hace para recordarlo en futuras misiones.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 /* Inyectar recuerdos persistentes aprendidos previamente */
