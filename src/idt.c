@@ -21,7 +21,7 @@ static struct idt_entry idt[256];
 static struct idtr idtr_desc;
 volatile int boot_gate_active = 0;
 
-extern void *isr_stub_table[32];
+extern void *isr_stub_table[];
 
 static const char *exception_names[32] = {
     "Divide-by-zero (#DE)",
@@ -91,8 +91,93 @@ static void print_hex64(uint64_t val)
     }
 }
 
+
+volatile uint64_t timer_ticks = 0;
+
+uint64_t timer_get_uptime_ms(void)
+{
+    return timer_ticks;
+}
+
+void timer_sleep_ms(uint32_t ms)
+{
+    uint64_t target = timer_ticks + (uint64_t)ms;
+    while (timer_ticks < target) {
+        __asm__ volatile ("hlt");
+    }
+}
+
+void pic_remap(void)
+{
+    /* ICW1: Iniciar inicializacion en modo cascada */
+    outb(0x20, 0x11);
+    io_wait();
+    outb(0xA0, 0x11);
+    io_wait();
+
+    /* ICW2: Vector base Master = 0x20 (32), Slave = 0x28 (40) */
+    outb(0x21, 0x20);
+    io_wait();
+    outb(0xA1, 0x28);
+    io_wait();
+
+    /* ICW3: Conectar Master con Slave en IRQ2 */
+    outb(0x21, 0x04);
+    io_wait();
+    outb(0xA1, 0x02);
+    io_wait();
+
+    /* ICW4: Modo 8086 */
+    outb(0x21, 0x01);
+    io_wait();
+    outb(0xA1, 0x01);
+    io_wait();
+
+    /* Desenmascarar solo IRQ0 (bit 0 = 0 en Master). Resto enmascarado por ahora */
+    outb(0x21, 0xFC); /* Desenmascarar IRQ0 (Timer) e IRQ1 (Teclado) */
+    outb(0xA1, 0xFF);
+}
+
+void timer_init(uint32_t freq_hz)
+{
+    pic_remap();
+
+    uint32_t divisor = 1193182 / freq_hz;
+    if (divisor == 0) divisor = 1;
+    if (divisor > 65535) divisor = 65535;
+
+    /* Canal 0, lobyte/hibyte, Modo 2 (generador de frecuencia), binario */
+    outb(0x43, 0x34);
+    outb(0x40, (uint8_t)(divisor & 0xFF));
+    outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
+}
+
+static void irq_dispatch(struct trap_frame *tf)
+{
+    if (tf->vector == 32) {
+        timer_ticks++;
+        outb(0x20, 0x20);
+        return;
+    }
+
+    if (tf->vector == 33) {
+        keyboard_irq_handler();
+        outb(0x20, 0x20);
+        return;
+    }
+
+    if (tf->vector >= 40) {
+        outb(0xA0, 0x20);
+    }
+    outb(0x20, 0x20);
+}
+
 void isr_exception_handler(struct trap_frame *tf)
 {
+    if (tf->vector >= 32 && tf->vector < 48) {
+        irq_dispatch(tf);
+        return;
+    }
     uint64_t cr2 = read_cr2();
     uint64_t cr0 = read_cr0();
     uint64_t cr3 = read_cr3();
@@ -149,7 +234,7 @@ void isr_exception_handler(struct trap_frame *tf)
 
 void idt_init(void)
 {
-    for (int i = 0; i < 32; ++i) {
+    for (int i = 0; i < 34; ++i) {
         idt_set_gate((uint8_t)i, (uint64_t)isr_stub_table[i], 0x08, 0x8E);
     }
 
@@ -157,5 +242,5 @@ void idt_init(void)
     idtr_desc.base  = (uint64_t)&idt;
 
     __asm__ volatile ("lidt %0" : : "m"(idtr_desc));
-    kprint("IDT: 32 excepciones x86_64 registradas (Vector 0-31 OK)\n");
+    kprint("IDT: 32 excepciones + IRQ0/1 registradas (Vectores 0-33 OK)\n");
 }

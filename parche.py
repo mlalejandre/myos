@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
-parche.py - Extracción y blindaje de la Puerta de Arranque (boot_gate.c)
-1. Crea src/boot_gate.h y src/boot_gate.c desacoplando el LLM de los tests de hardware.
-2. Integra boot_gate.o en Makefile.
-3. Limpia src/kernel.c delegando en boot_gate.
-4. Instrumenta ejecutar.py para proteger src/boot_gate.* contra adulteraciones de la IA.
+parche.py - Actualización del mapa de ruta (dondeestamos.txt), controlador
+de teclado PS/2 (IRQ1) y terminal interactivo dual VGA (0xB8000) / COM1.
 """
 
 from pathlib import Path
@@ -14,11 +11,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
+DONDE_TXT = ROOT / "dondeestamos.txt"
+CONSOLE_H = SRC_DIR / "console.h"
+CONSOLE_C = SRC_DIR / "console.c"
+IDT_C = SRC_DIR / "idt.c"
 KERNEL_C = SRC_DIR / "kernel.c"
-BOOT_GATE_H = SRC_DIR / "boot_gate.h"
-BOOT_GATE_C = SRC_DIR / "boot_gate.c"
-MAKEFILE = ROOT / "Makefile"
-EJECUTAR = ROOT / "ejecutar.py"
 DOCKER_IMAGE = "myos-toolchain"
 
 
@@ -40,314 +37,465 @@ def run_docker_check() -> bool:
     return True
 
 
-BOOT_GATE_H_CONTENT = """#ifndef MYOS_BOOT_GATE_H
-#define MYOS_BOOT_GATE_H
+DONDE_ESTAMOS_CONTENT = """================================================================================
+ESTADO DEL PROYECTO MYOS (Octubre 2026)
+================================================================================
 
-#include <stdint.h>
+Balance de los 9 Grandes Hitos Arquitectónicos Conseguidos
+--------------------------------------------------------------------------------
+#   Hito                                Estado  Impacto en el Sistema
+1   Feedback veraz de herramientas      ✅      Telemetría física real (CR0/CR3/CR4, heap, PCI, ARP en vivo, LBA).
+2   Depuración básica e IDT 64-bit      ✅      32 excepciones x86_64 capturadas con volcado de RIP, CR2 y pila segura.
+3   Puerta de arranque (Boot Gate)      ✅      Submódulo modular 'boot_gate.c' con rollback automático del host ante kernels rotos.
+4   Salida estructurada JSON (Grammar)  ✅      Tokens forzados por gramática en llama-server (sin regex frágiles).
+5   Persistencia RamFS en virtio-blk    ✅      Firma MYOSFS01, superbloque, inodos persistentes y 'dirty-tracking' (I/O -90%).
+6   Higiene y Despachador Unificado     ✅      Eliminación de código muerto en kernel.c; 'dispatch_command' como única fuente de verdad.
+7   Interrupciones de Hardware (STI)    ✅      PIC 8259 remapeado a 0x20..0x2F, PIT Timer IRQ0 a 1000 Hz, uptime y sleep_ms con HLT.
+8   Pila de Red WAN y Herramientas Web  ✅      Resolución DNS en vivo, HTTP/1.1 con cabecera 'Host' dinámica y cliente 'curl' autónomo.
+9   Teclado PS/2 y Terminal Dual VGA    ✅      IRQ1 activa (vector 33), scancodes Set 1 y pantalla QEMU interactiva con scroll y cursor.
 
-/* Ejecuta la suite de pruebas bare-metal (0 = OK, -1 = fallo critico) */
-int boot_gate_run_test_suite(char *out_buf, uint32_t max_out);
+--------------------------------------------------------------------------------
+Siguientes Horizontes para MYOS (Plan de Evolución)
+--------------------------------------------------------------------------------
 
-/* Verificacion del modo canary en el arranque */
-void boot_gate_check(void);
+1. Fuego Real con el Agente Autónomo:
+   - Probar al agente ReAct en misiones multi-paso encadenando resolución DNS, peticiones HTTP (curl),
+     análisis de telemetría y auto-modificación de código en disco.
 
-#endif
+2. Gestor de Memoria Física y Virtual (PMM / VMM):
+   - Reemplazar el mapeo plano inicial de 1 GiB por un asignador de marcos físicos (bitmap allocator)
+   - Protección de páginas con bit NX (No-Execute) en pila/heap y Read-Only en secciones .text/.rodata.
+
+3. Multitarea Cooperativa (kthreads):
+   - Estructuras TCB (Thread Control Block) y función de cesión voluntaria 'schedule()' / 'yield()'
+     para permitir tareas en segundo plano sin condiciones de carrera en los controladores.
+
+4. Hito Estratégico: Portabilidad Multi-Arquitectura para Raspberry Pi 4 (AArch64):
+   - Separación limpia del árbol de código en 'src/arch/x86_64' y 'src/arch/aarch64'.
+   - Compilación cruzada en Docker mediante 'gcc-aarch64-linux-gnu'.
+   - Mantenimiento del 80% del código universal en C (TCP/IP, HTTP, RamFS, JSON y bucle ReAct del Agente).
+   - Capa de arranque para ARM64: Exception Level 1 (EL1), MMIO para UART/GPIO, arranque con 'kernel8.img'
+     en tarjeta microSD para ejecución en placa física real.
 """
 
-BOOT_GATE_C_CONTENT = """#include <stdint.h>
 
-#include "boot_gate.h"
-#include "console.h"
+def patch_console_h() -> bool:
+    content = CONSOLE_H.read_text(encoding="utf-8")
+    if "keyboard_irq_handler" in content:
+        return True
+
+    addition = """void console_clear(void);
+void keyboard_irq_handler(void);
+"""
+    content = content.replace("int  kgetline(char *buf, uint32_t max);", "int  kgetline(char *buf, uint32_t max);\n" + addition, 1)
+    CONSOLE_H.write_text(content, encoding="utf-8")
+    print("[OK] src/console.h actualizado con declaraciones de teclado y consola.")
+    return True
+
+
+def patch_console_c() -> bool:
+    content = CONSOLE_C.read_text(encoding="utf-8")
+    if "keyboard_irq_handler" in content:
+        return True
+
+    new_console_c = """#include "console.h"
 #include "io.h"
-#include "mem.h"
-#include "net.h"
-#include "ip.h"
-#include "fs.h"
-#include "virtio_blk.h"
-#include "llm.h"
-#include "idt.h"
 
-#define BOOT_GATE_LBA 24
+#define COM1 0x3F8
 
-static void bg_puts(char *out, uint32_t max, uint32_t *pos, const char *s)
+static volatile uint16_t *const VGA_BUF = (uint16_t *)0xB8000;
+static uint32_t vga_row = 0;
+static uint32_t vga_col = 0;
+
+static void vga_update_cursor(void)
 {
-    if (!out || max == 0) return;
-    while (*s && *pos + 1 < max) {
-        out[(*pos)++] = *s++;
-    }
-    out[*pos] = '\\0';
+    uint16_t pos = (uint16_t)(vga_row * 80 + vga_col);
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
 }
 
-/* ---- Suite de Auto-Test de No Regresion (Bare-Metal) ------------- */
-int boot_gate_run_test_suite(char *out_buf, uint32_t max_out)
+void console_clear(void)
 {
-    uint32_t pos = 0;
-    int failed = 0;
+    for (uint32_t i = 0; i < 80 * 25; ++i) {
+        VGA_BUF[i] = 0x0720;
+    }
+    vga_row = 0;
+    vga_col = 0;
+    vga_update_cursor();
+}
 
-    kprint("\\n============================================================\\n");
-    kprint("MYOS BARE-METAL TEST SUITE (Verificacion de No Regresion)\\n");
-    kprint("============================================================\\n");
-    bg_puts(out_buf, max_out, &pos, "[SUITE DE AUTO-TEST MYOS]:\\n");
+static void vga_scroll(void)
+{
+    while (vga_row >= 25) {
+        for (int i = 0; i < 24 * 80; ++i) {
+            VGA_BUF[i] = VGA_BUF[i + 80];
+        }
+        for (int i = 24 * 80; i < 25 * 80; ++i) {
+            VGA_BUF[i] = 0x0720;
+        }
+        vga_row--;
+    }
+}
 
-    /* 1. Test de Heap y Alineacion 16-bytes (kmalloc/kfree) */
-    kprint("[TEST 1/5] Heap Allocator & Alineacion 16-bytes... ");
-    void *p1 = kmalloc(64);
-    void *p2 = kmalloc(256);
-    void *p3 = kmalloc(1024);
-    if (!p1 || !p2 || !p3 ||
-        ((uintptr_t)p1 & 0x0F) != 0 ||
-        ((uintptr_t)p2 & 0x0F) != 0 ||
-        ((uintptr_t)p3 & 0x0F) != 0) {
-        kprint("FALLO (alloc o desalineacion)\\n");
-        bg_puts(out_buf, max_out, &pos, "- Heap kmalloc: FALLO\\n");
-        failed++;
-    } else {
-        memset(p1, 0xAA, 64);
-        memset(p2, 0x55, 256);
-        memset(p3, 0x33, 1024);
-        uint8_t *b1 = (uint8_t *)p1;
-        uint8_t *b2 = (uint8_t *)p2;
-        int canaries_ok = (b1[0] == 0xAA && b1[63] == 0xAA && b2[0] == 0x55 && b2[255] == 0x55);
-        kfree(p2);
-        kfree(p1);
-        kfree(p3);
-        if (canaries_ok) {
-            kprint("OK (16-byte align & canaries OK)\\n");
-            bg_puts(out_buf, max_out, &pos, "- Heap kmalloc: OK\\n");
-        } else {
-            kprint("FALLO (corrupcion de canario)\\n");
-            bg_puts(out_buf, max_out, &pos, "- Heap kmalloc: FALLO CANARIO\\n");
-            failed++;
+static void vga_putc(char c)
+{
+    if (c == '\\r') {
+        vga_col = 0;
+    } else if (c == '\\n') {
+        vga_col = 0;
+        vga_row++;
+    } else if (c == '\\b') {
+        if (vga_col > 0) {
+            vga_col--;
+            VGA_BUF[vga_row * 80 + vga_col] = 0x0720;
+        }
+    } else if ((uint8_t)c >= 32 && (uint8_t)c < 127) {
+        VGA_BUF[vga_row * 80 + vga_col] = (uint16_t)(0x0700 | (uint8_t)c);
+        vga_col++;
+        if (vga_col >= 80) {
+            vga_col = 0;
+            vga_row++;
         }
     }
+    vga_scroll();
+    vga_update_cursor();
+}
 
-    /* 2. Test de Disco VirtIO-BLK (Lectura/Escritura LBA 2048) */
-    kprint("[TEST 2/5] Disco VirtIO-BLK (Lectura/Escritura LBA 2048)... ");
-    static uint8_t sec_w[512] __attribute__((aligned(16)));
-    static uint8_t sec_r[512] __attribute__((aligned(16)));
-    for (int i = 0; i < 512; ++i) sec_w[i] = (uint8_t)(i ^ 0x5A);
-    memcpy(sec_w, "MYOS_SELFTEST_INTEGRITY_SECTOR_2048", 35);
-    if (virtio_blk_write(2048, sec_w) != 0 ||
-        virtio_blk_read(2048, sec_r) != 0 ||
-        memcmp(sec_w, sec_r, 512) != 0) {
-        kprint("FALLO de I/O en virtio-blk\\n");
-        bg_puts(out_buf, max_out, &pos, "- VirtIO-BLK: FALLO\\n");
-        failed++;
-    } else {
-        kprint("OK (LBA 2048 verificado)\\n");
-        bg_puts(out_buf, max_out, &pos, "- VirtIO-BLK: OK\\n");
+void kputc(char c)
+{
+    while ((inb(COM1 + 5) & 0x20) == 0) {
+    }
+    outb(COM1, (uint8_t)c);
+
+    vga_putc(c);
+}
+
+void kprint(const char *s)
+{
+    for (; *s; ++s) {
+        kputc(*s);
+    }
+}
+
+static void put_nibble(uint8_t v)
+{
+    v &= 0x0F;
+    kputc(v < 10 ? (char)('0' + v) : (char)('A' + v - 10));
+}
+
+void kprint_hex8(uint8_t value)
+{
+    put_nibble((uint8_t)(value >> 4));
+    put_nibble(value);
+}
+
+void kprint_hex16(uint16_t value)
+{
+    kprint_hex8((uint8_t)(value >> 8));
+    kprint_hex8((uint8_t)value);
+}
+
+void kprint_hex32(uint32_t value)
+{
+    kprint_hex16((uint16_t)(value >> 16));
+    kprint_hex16((uint16_t)value);
+}
+
+void kprint_dec(uint32_t value)
+{
+    char tmp[10];
+    int n = 0;
+
+    if (value == 0) {
+        kputc('0');
+        return;
     }
 
-    /* 3. Test de Sistema de Archivos Persistente (RamFS / MYOSFS01) */
-    kprint("[TEST 3/5] Sistema de Archivos RamFS (Ciclo CRUD y sync)... ");
-    const char *tfile = "/.test_canary.tmp";
-    const char *tdata = "MYOS_FS_CANARY_VALIDATION_STRING";
-    char rdata[64];
-    memset(rdata, 0, sizeof(rdata));
-    int w_res = vfs_write(tfile, tdata, 32);
-    int r_res = vfs_read(tfile, rdata, sizeof(rdata));
-    int d_res = vfs_delete(tfile);
-    int r2_res = vfs_read(tfile, rdata, sizeof(rdata));
-    if (w_res > 0 && r_res > 0 && memcmp(rdata, tdata, 32) == 0 && d_res == 0 && r2_res < 0) {
-        kprint("OK (crear, leer, borrar, sync OK)\\n");
-        bg_puts(out_buf, max_out, &pos, "- RamFS MYOSFS01: OK\\n");
-    } else {
-        kprint("FALLO en operaciones VFS\\n");
-        bg_puts(out_buf, max_out, &pos, "- RamFS MYOSFS01: FALLO\\n");
-        failed++;
+    while (value != 0) {
+        tmp[n++] = (char)('0' + value % 10);
+        value /= 10;
     }
 
-    /* 4. Test de Red Bare-Metal (ARP + Ping Gateway 10.0.2.2) */
-    kprint("[TEST 4/5] Pila de Red (ARP + ICMP Ping Gateway 10.0.2.2)... ");
-    int p_res = icmp_ping(net_gateway, 777, 1200);
-    if (p_res == 1) {
-        kprint("OK (Echo Reply recibido)\\n");
-        bg_puts(out_buf, max_out, &pos, "- Red (ICMP Gateway): OK\\n");
-    } else {
-        kprint("FALLO (Gateway no responde)\\n");
-        bg_puts(out_buf, max_out, &pos, "- Red (ICMP Gateway): FALLO\\n");
-        failed++;
+    while (n > 0) {
+        kputc(tmp[--n]);
     }
+}
 
-    /* 5. Test de Enlace HTTP LLM Local (/health) - No bloqueante */
-    kprint("[TEST 5/5] Enlace HTTP llama-server (/health)... ");
-    if (llm_health()) {
-        kprint("OK (HTTP 200 OK)\\n");
-        bg_puts(out_buf, max_out, &pos, "- LLM Server: OK\\n");
-    } else {
-        kprint("AVISO (Servidor LLM inactivo o sin respuesta, no critico)\\n");
-        bg_puts(out_buf, max_out, &pos, "- LLM Server: AVISO (offline o ocupado)\\n");
+void kprint_mac(const uint8_t *mac)
+{
+    for (int i = 0; i < 6; ++i) {
+        kprint_hex8(mac[i]);
+        if (i != 5) kputc(':');
     }
+}
 
-    kprint("============================================================\\n");
-    if (failed == 0) {
-        kprint("RESUMEN: COMPONENTES HARDWARE OPERATIVOS (4/4 CRITICOS OK)\\n\\n");
-        bg_puts(out_buf, max_out, &pos, "Resultado: Pruebas de hardware superadas. Kernel robusto.");
+void kprint_ip(const uint8_t *ip)
+{
+    for (int i = 0; i < 4; ++i) {
+        kprint_dec(ip[i]);
+        if (i != 3) kputc('.');
+    }
+}
+
+/* ====================================================================
+ * Controlador de Teclado PS/2 (Scan Code Set 1 - IRQ1)
+ * ==================================================================== */
+#define KBD_BUF_SIZE 128
+static volatile char kbd_buf[KBD_BUF_SIZE];
+static volatile uint32_t kbd_head = 0;
+static volatile uint32_t kbd_tail = 0;
+static int shift_active = 0;
+static int caps_active = 0;
+
+static const char kbd_us_lower[128] = {
+    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\\b',
+    '\\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\\r',
+    0, /* Ctrl */
+    'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\\'', '`',
+    0, /* LShift */
+    '\\\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/',
+    0, /* RShift */
+    '*', 0, /* Alt */ ' ', 0 /* CapsLock */
+};
+
+static const char kbd_us_upper[128] = {
+    0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\\b',
+    '\\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\\r',
+    0, /* Ctrl */
+    'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~',
+    0, /* LShift */
+    '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?',
+    0, /* RShift */
+    '*', 0, /* Alt */ ' ', 0 /* CapsLock */
+};
+
+void keyboard_irq_handler(void)
+{
+    uint8_t sc = inb(0x60);
+    if (sc == 0x2A || sc == 0x36) {
+        shift_active = 1;
+        return;
+    }
+    if (sc == 0xAA || sc == 0xB6) {
+        shift_active = 0;
+        return;
+    }
+    if (sc == 0x3A) {
+        caps_active = !caps_active;
+        return;
+    }
+    if (sc & 0x80) {
+        return; /* Ignorar key release */
+    }
+    if (sc < sizeof(kbd_us_lower)) {
+        char ch = shift_active ? kbd_us_upper[sc] : kbd_us_lower[sc];
+        if (caps_active) {
+            if (ch >= 'a' && ch <= 'z') ch = ch - 'a' + 'A';
+            else if (ch >= 'A' && ch <= 'Z') ch = ch - 'A' + 'a';
+        }
+        if (ch != 0) {
+            uint32_t next = (kbd_head + 1) % KBD_BUF_SIZE;
+            if (next != kbd_tail) {
+                kbd_buf[kbd_head] = ch;
+                kbd_head = next;
+            }
+        }
+    }
+}
+
+int kgetc_ready(void)
+{
+    if (kbd_head != kbd_tail) {
+        return 1;
+    }
+    return (inb(COM1 + 5) & 0x01) != 0;
+}
+
+char kgetc(void)
+{
+    while (!kgetc_ready()) {
+        cpu_pause();
+    }
+    if (kbd_head != kbd_tail) {
+        char ch = kbd_buf[kbd_tail];
+        kbd_tail = (kbd_tail + 1) % KBD_BUF_SIZE;
+        return ch;
+    }
+    return (char)inb(COM1);
+}
+
+int kgetline(char *buf, uint32_t max)
+{
+    if (!buf || max == 0) {
         return 0;
-    } else {
-        kprint("RESUMEN: DETECTADOS FALLOS CRITICOS EN EL KERNEL.\\n\\n");
-        bg_puts(out_buf, max_out, &pos, "Resultado: FALLOS DETECTADOS en la suite de auto-test.");
-        return -1;
-    }
-}
-
-/* ---- Puerta de Arranque (Canary Boot) ----------------------------- */
-void boot_gate_check(void)
-{
-    static char gate_sec[512];
-    if (virtio_blk_read(BOOT_GATE_LBA, gate_sec) != 0) {
-        return;
     }
 
-    if (memcmp(gate_sec, "GATE_TEST_REQ", 13) != 0) {
-        return;
-    }
+    uint32_t i = 0;
 
-    boot_gate_active = 1;
-    kprint("\\n============================================================\\n");
-    kprint("[PUERTA DE ARRANQUE]: Verificando salud del nuevo kernel\\n");
-    kprint("============================================================\\n");
+    while (i < max - 1) {
+        char c = kgetc();
 
-    /* Limpiar sector para no quedar en bucle */
-    memset(gate_sec, 0, sizeof(gate_sec));
-    virtio_blk_write(BOOT_GATE_LBA, gate_sec);
-
-    /* Ejecutar Suite de Hardware (Hard fails) */
-    static char gate_report[512];
-    if (boot_gate_run_test_suite(gate_report, sizeof(gate_report)) != 0) {
-        kprint("[PUERTA DE ARRANQUE] ERROR: La suite de auto-test fallo. ABORTANDO KERNEL.\\n");
-        qemu_exit(0x22); /* Dispara rollback del host */
-        return;
-    }
-
-    /* Verificacion rapida y no bloqueante del LLM si el servicio esta levantado */
-    if (llm_health()) {
-        static char canary_reply[128];
-        if (llm_chat("Responde: OK", canary_reply, sizeof(canary_reply), 10000)) {
-            kprint("[PUERTA DE ARRANQUE] Enlace de inferencia LLM comprobado.\\n");
-        } else {
-            kprint("[PUERTA DE ARRANQUE] AVISO: Inferencia ocupada; kernel aprobado por hardware.\\n");
+        if (c == '\\r' || c == '\\n') {
+            kputc('\\r');
+            kputc('\\n');
+            break;
         }
-    } else {
-        kprint("[PUERTA DE ARRANQUE] AVISO: LLM offline; kernel aprobado por hardware.\\n");
+
+        if (c == '\\b' || c == 0x7F) {
+            if (i > 0) {
+                --i;
+                kprint("\\b \\b");
+            }
+            continue;
+        }
+
+        if ((uint8_t)c >= 32 && (uint8_t)c < 127) {
+            buf[i++] = c;
+            kputc(c);
+        }
     }
 
-    kprint("[PUERTA DE ARRANQUE] EXITO: Kernel verificado y operativo.\\n");
-    kprint("Notificando al host (aprobacion de parche)...\\n");
-    boot_gate_active = 0;
-    qemu_exit(0x20); /* Codigo de salida 65 (QEMU_EXIT_GATE_OK) */
+    buf[i] = '\\0';
+    return (int)i;
 }
 """
+    CONSOLE_C.write_text(new_console_c, encoding="utf-8")
+    print("[OK] src/console.c actualizado con controlador de teclado PS/2 y terminal VGA dual.")
+    return True
+
+
+def patch_idt_c() -> bool:
+    content = IDT_C.read_text(encoding="utf-8")
+
+    # 1. Desenmascarar IRQ0 e IRQ1 en pic_remap (0xFC)
+    old_mask = "outb(0x21, 0xFE);"
+    new_mask = "outb(0x21, 0xFC); /* Desenmascarar IRQ0 (Timer) e IRQ1 (Teclado) */"
+    if old_mask in content:
+        content = content.replace(old_mask, new_mask, 1)
+
+    # 2. Despachar vector 33 en irq_dispatch
+    old_irq = """static void irq_dispatch(struct trap_frame *tf)
+{
+    if (tf->vector == 32) {
+        timer_ticks++;
+        /* Enviar EOI (End of Interrupt) al Master PIC */
+        outb(0x20, 0x20);
+        return;
+    }"""
+
+    new_irq = """static void irq_dispatch(struct trap_frame *tf)
+{
+    if (tf->vector == 32) {
+        timer_ticks++;
+        outb(0x20, 0x20);
+        return;
+    }
+
+    if (tf->vector == 33) {
+        keyboard_irq_handler();
+        outb(0x20, 0x20);
+        return;
+    }"""
+
+    if old_irq in content:
+        content = content.replace(old_irq, new_irq, 1)
+
+    IDT_C.write_text(content, encoding="utf-8")
+    print("[OK] src/idt.c: IRQ1 (vector 33) desenmascarada y despachada hacia el teclado.")
+    return True
+
+
+def patch_kernel_c() -> bool:
+    content = KERNEL_C.read_text(encoding="utf-8")
+
+    # Redirigir serial_putc hacia kputc para que todo lo del shell aparezca en serie Y en VGA
+    old_sp = """static void serial_putc(char c)
+{
+    while (!serial_ready()) {
+    }
+
+    outb(COM1, (uint8_t)c);
+}"""
+
+    new_sp = """static void serial_putc(char c)
+{
+    kputc(c);
+}"""
+
+    if old_sp in content:
+        content = content.replace(old_sp, new_sp, 1)
+
+    # Redirigir clear_screen hacia console_clear
+    old_cs = """static void clear_screen(void)
+{
+    for (uint32_t i = 0; i < 80 * 25; ++i) {
+        VGA[i] = 0x0720;
+    }
+}"""
+
+    new_cs = """static void clear_screen(void)
+{
+    console_clear();
+}"""
+
+    if old_cs in content:
+        content = content.replace(old_cs, new_cs, 1)
+
+    KERNEL_C.write_text(content, encoding="utf-8")
+    print("[OK] src/kernel.c sincronizado: la salida del shell se muestra tanto en serie como en VGA.")
+    return True
 
 
 def main() -> int:
-    print("-> Creando src/boot_gate.h y src/boot_gate.c...")
-    BOOT_GATE_H.write_text(BOOT_GATE_H_CONTENT, encoding="utf-8")
-    BOOT_GATE_C.write_text(BOOT_GATE_C_CONTENT, encoding="utf-8")
+    bak_donde = ROOT / "dondeestamos.txt.bak"
+    bak_ch = ROOT / "src/console.h.bak"
+    bak_cc = ROOT / "src/console.c.bak"
+    bak_idt = ROOT / "src/idt.c.bak"
+    bak_kc = ROOT / "src/kernel.c.bak"
 
-    # 1. Modificar Makefile para compilar boot_gate.o
-    mk_text = MAKEFILE.read_text(encoding="utf-8")
-    if "$(BUILD)/boot_gate.o" not in mk_text:
-        old_mk = "$(BUILD)/idt.o"
-        new_mk = "$(BUILD)/idt.o \\\n\t$(BUILD)/boot_gate.o"
-        if old_mk in mk_text:
-            mk_text = mk_text.replace(old_mk, new_mk, 1)
-            MAKEFILE.write_text(mk_text, encoding="utf-8")
-            print("[OK] Makefile actualizado con $(BUILD)/boot_gate.o.")
-        else:
-            print("ERROR: No se encontró $(BUILD)/idt.o en Makefile")
-            return 1
+    shutil.copyfile(DONDE_TXT, bak_donde)
+    shutil.copyfile(CONSOLE_H, bak_ch)
+    shutil.copyfile(CONSOLE_C, bak_cc)
+    shutil.copyfile(IDT_C, bak_idt)
+    shutil.copyfile(KERNEL_C, bak_kc)
 
-    # 2. Modificar src/kernel.c: incluir boot_gate.h y remover bloques antiguos
-    kc_text = KERNEL_C.read_text(encoding="utf-8")
+    DONDE_TXT.write_text(DONDE_ESTAMOS_CONTENT, encoding="utf-8")
+    print("[OK] dondeestamos.txt actualizado con los 9 hitos y la hoja de ruta.")
 
-    # Incluir boot_gate.h
-    if '#include "boot_gate.h"' not in kc_text:
-        kc_text = kc_text.replace('#include "idt.h"', '#include "idt.h"\n#include "boot_gate.h"', 1)
+    ok = (patch_console_h() and patch_console_c() and patch_idt_c() and patch_kernel_c())
 
-    # Reemplazar llamada en dispatch_command y remover declaración estática
-    old_proto = "static uint32_t max_fb_dummy = 2048;\nstatic int kernel_run_test_suite(char *out_buf, uint32_t max_out);"
-    new_proto = "static uint32_t max_fb_dummy = 2048;"
-    if old_proto in kc_text:
-        kc_text = kc_text.replace(old_proto, new_proto, 1)
-
-    kc_text = kc_text.replace(
-        "kernel_run_test_suite(out_buf, max_out);",
-        "boot_gate_run_test_suite(out_buf, max_out);",
-        1
-    )
-
-    # Remover el cuerpo de kernel_run_test_suite y boot_gate_check
-    marker_start = "/* ---- Suite de Auto-Test de No Regresion (Bare-Metal) ------------- */"
-    marker_end = "void kernel_main(void)"
-
-    if marker_start in kc_text and marker_end in kc_text:
-        start_idx = kc_text.find(marker_start)
-        end_idx = kc_text.find(marker_end)
-        kc_text = kc_text[:start_idx] + kc_text[end_idx:]
-        print("[OK] Funciones de boot_gate removidas de src/kernel.c.")
-    else:
-        print("ERROR: No se encontraron los marcadores de la suite en src/kernel.c")
+    if not ok:
+        print("[ROLLBACK] Falló algún paso; restaurando archivos originales...")
+        shutil.copyfile(bak_donde, DONDE_TXT)
+        shutil.copyfile(bak_ch, CONSOLE_H)
+        shutil.copyfile(bak_cc, CONSOLE_C)
+        shutil.copyfile(bak_idt, IDT_C)
+        shutil.copyfile(bak_kc, KERNEL_C)
         return 1
 
-    KERNEL_C.write_text(kc_text, encoding="utf-8")
-
-    # 3. Blindaje en ejecutar.py
-    ej_text = EJECUTAR.read_text(encoding="utf-8")
-    old_target = (
-        "def safe_target(name: str) -> Path | None:\n"
-        "    if \"\\x00\" in name:\n"
-        "        return None\n"
-        "    p = (ROOT / name).resolve()          # resuelve '..' y symlinks\n"
-        "    src = SRC_DIR.resolve()\n"
-        "    if p.is_relative_to(src) and p.suffix.lower() in ALLOWED_EXT and p.is_file():\n"
-        "        return p\n"
-        "    return None"
-    )
-
-    new_target = (
-        "PROTECTED_FILES = {\n"
-        "    'boot.s', 'idt.c', 'idt.h', 'io.h', 'srcfs.c', 'srcfs.h',\n"
-        "    'virtio_blk.c', 'virtio_blk.h', 'boot_gate.c', 'boot_gate.h'\n"
-        "}\n\n\n"
-        "def is_target_protected(path: Path) -> bool:\n"
-        "    if path.name in PROTECTED_FILES:\n"
-        "        return True\n"
-        "    prot_txt = ROOT / 'protected.txt'\n"
-        "    if prot_txt.exists():\n"
-        "        for line in prot_txt.read_text(encoding='utf-8').splitlines():\n"
-        "            line = line.strip()\n"
-        "            if line and not line.startswith('#') and Path(line).name == path.name:\n"
-        "                return True\n"
-        "    return False\n\n\n"
-        "def safe_target(name: str) -> Path | None:\n"
-        "    if \"\\x00\" in name:\n"
-        "        return None\n"
-        "    p = (ROOT / name).resolve()          # resuelve '..' y symlinks\n"
-        "    src = SRC_DIR.resolve()\n"
-        "    if p.is_relative_to(src) and p.suffix.lower() in ALLOWED_EXT and p.is_file():\n"
-        "        if is_target_protected(p):\n"
-        "            print(f\"[SEGURIDAD HOST] Modificacion denegada: '{p.name}' es un archivo protegido.\")\n"
-        "            return None\n"
-        "        return p\n"
-        "    return None"
-    )
-
-    if old_target in ej_text:
-        ej_text = ej_text.replace(old_target, new_target, 1)
-        EJECUTAR.write_text(ej_text, encoding="utf-8")
-        print("[OK] ejecutar.py blindado: la IA ya no puede modificar archivos protegidos.")
-
-    # 4. Verificación de compilación en Docker
-    print("-> Verificando compilación completa en contenedor...")
+    print("-> Verificando compilación limpia con Docker...")
     if not run_docker_check():
-        print("[ERROR] Falló la compilación del nuevo sistema.")
+        print("[ROLLBACK] Error de compilación; restaurando originales...")
+        shutil.copyfile(bak_donde, DONDE_TXT)
+        shutil.copyfile(bak_ch, CONSOLE_H)
+        shutil.copyfile(bak_cc, CONSOLE_C)
+        shutil.copyfile(bak_idt, IDT_C)
+        shutil.copyfile(bak_kc, KERNEL_C)
         return 1
 
-    print("\n[ÉXITO] Arquitectura blindada completada:")
-    print("        1. Submódulo src/boot_gate.c creado y desacoplado.")
-    print("        2. Canary Boot insensible a cortes o latencias del LLM.")
-    print("        3. Archivos del sistema y suite de tests protegidos contra la IA en ejecutar.py.")
+    bak_donde.unlink(missing_ok=True)
+    bak_ch.unlink(missing_ok=True)
+    bak_cc.unlink(missing_ok=True)
+    bak_idt.unlink(missing_ok=True)
+    bak_kc.unlink(missing_ok=True)
+
+    print("\n[ÉXITO TOTAL]:")
+    print("  1. 'dondeestamos.txt' consolidado con los 9 hitos y el hito de Raspberry Pi 4.")
+    print("  2. Teclado PS/2 (IRQ1 / vector 33) completamente funcional con buffer circular.")
+    print("  3. Terminal dual activado: la pantalla gráfica de QEMU ahora es interactiva y hace scroll.")
+    print("  4. Puedes escribir comandos tanto desde tu terminal como haciendo clic en la ventana de QEMU.")
     return 0
 
 

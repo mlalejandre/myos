@@ -39,3 +39,10 @@ void idt_init(void);
 extern volatile int boot_gate_active;
 
 #endif
+
+/* Temporizador del sistema y gestion de IRQ */
+extern volatile uint64_t timer_ticks;
+uint64_t timer_get_uptime_ms(void);
+void timer_sleep_ms(uint32_t ms);
+void pic_remap(void);
+void timer_init(uint32_t freq_hz);

@@ -186,6 +186,8 @@ ISR_NOERR 28
 ISR_NOERR 29
 ISR_ERR   30
 ISR_NOERR 31
+ISR_NOERR 32
+ISR_NOERR 33
 
 .extern isr_exception_handler
 
@@ -241,6 +243,7 @@ isr_stub_table:
     .quad isr_stub_20, isr_stub_21, isr_stub_22, isr_stub_23
     .quad isr_stub_24, isr_stub_25, isr_stub_26, isr_stub_27
     .quad isr_stub_28, isr_stub_29, isr_stub_30, isr_stub_31
+    .quad isr_stub_32, isr_stub_33
 
 .section .text
 

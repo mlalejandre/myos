@@ -95,9 +95,10 @@ static void http_parse_response(char *buf, uint32_t len, struct http_response *r
     }
 }
 
-int http_request(
+int http_request_host(
     const uint8_t *ip,
     uint16_t port,
+    const char *host,
     const char *method,
     const char *path,
     const char *content_type,
@@ -117,7 +118,7 @@ int http_request(
     resp->body = 0;
     resp->body_len = 0;
 
-    uint32_t connect_timeout = timeout_ms > 6000 ? 6000 : timeout_ms;
+    uint32_t connect_timeout = timeout_ms > 8000 ? 8000 : timeout_ms;
     int h = tcp_connect(ip, port, connect_timeout);
     if (h < 0) {
         kprint("HTTP: TCP connect failed\n");
@@ -128,12 +129,16 @@ int http_request(
     buf_append(req_buf, sizeof(req_buf), &pos, method);
     buf_append(req_buf, sizeof(req_buf), &pos, " ");
     buf_append(req_buf, sizeof(req_buf), &pos, path);
-    buf_append(req_buf, sizeof(req_buf), &pos, " HTTP/1.0\r\nHost: ");
+    buf_append(req_buf, sizeof(req_buf), &pos, " HTTP/1.1\r\nHost: ");
 
-    for (int i = 0; i < 4; ++i) {
-        buf_append_num(req_buf, sizeof(req_buf), &pos, ip[i]);
-        if (i < 3) {
-            buf_append(req_buf, sizeof(req_buf), &pos, ".");
+    if (host && host[0]) {
+        buf_append(req_buf, sizeof(req_buf), &pos, host);
+    } else {
+        for (int i = 0; i < 4; ++i) {
+            buf_append_num(req_buf, sizeof(req_buf), &pos, ip[i]);
+            if (i < 3) {
+                buf_append(req_buf, sizeof(req_buf), &pos, ".");
+            }
         }
     }
 
@@ -142,7 +147,7 @@ int http_request(
         buf_append_num(req_buf, sizeof(req_buf), &pos, port);
     }
 
-    buf_append(req_buf, sizeof(req_buf), &pos, "\r\nUser-Agent: MYOS/0.1\r\n");
+    buf_append(req_buf, sizeof(req_buf), &pos, "\r\nUser-Agent: MYOS/0.1\r\nAccept: */*\r\n");
 
     if (content_type) {
         buf_append(req_buf, sizeof(req_buf), &pos, "Content-Type: ");
@@ -186,7 +191,7 @@ int http_request(
             break;
         }
 
-        int n = tcp_recv(h, buf + total, (uint16_t)(buf_size - 1 - total), 1500);
+        int n = tcp_recv(h, buf + total, (uint16_t)(buf_size - 1 - total), 4000);
         if (n > 0) {
             total += (uint32_t)n;
             continue;
@@ -211,6 +216,23 @@ int http_request(
     return resp->status_code;
 }
 
+int http_request(
+    const uint8_t *ip,
+    uint16_t port,
+    const char *method,
+    const char *path,
+    const char *content_type,
+    const char *body,
+    uint32_t body_len,
+    char *buf,
+    uint32_t buf_size,
+    struct http_response *resp,
+    uint32_t timeout_ms
+)
+{
+    return http_request_host(ip, port, 0, method, path, content_type, body, body_len, buf, buf_size, resp, timeout_ms);
+}
+
 int http_get(
     const uint8_t *ip,
     uint16_t port,
@@ -221,7 +243,21 @@ int http_get(
     uint32_t timeout_ms
 )
 {
-    return http_request(ip, port, "GET", path, 0, 0, 0, buf, buf_size, resp, timeout_ms);
+    return http_request_host(ip, port, 0, "GET", path, 0, 0, 0, buf, buf_size, resp, timeout_ms);
+}
+
+int http_get_host(
+    const uint8_t *ip,
+    uint16_t port,
+    const char *host,
+    const char *path,
+    char *buf,
+    uint32_t buf_size,
+    struct http_response *resp,
+    uint32_t timeout_ms
+)
+{
+    return http_request_host(ip, port, host, "GET", path, 0, 0, 0, buf, buf_size, resp, timeout_ms);
 }
 
 int http_post_json(
@@ -236,5 +272,5 @@ int http_post_json(
 )
 {
     uint32_t len = my_strlen(json_body);
-    return http_request(ip, port, "POST", path, "application/json", json_body, len, buf, buf_size, resp, timeout_ms);
+    return http_request_host(ip, port, 0, "POST", path, "application/json", json_body, len, buf, buf_size, resp, timeout_ms);
 }

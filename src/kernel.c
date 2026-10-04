@@ -40,10 +40,7 @@ static int serial_ready(void)
 
 static void serial_putc(char c)
 {
-    while (!serial_ready()) {
-    }
-
-    outb(COM1, (uint8_t)c);
+    kputc(c);
 }
 
 static void serial_print(const char *s)
@@ -103,9 +100,7 @@ static void serial_put_dec(uint8_t value)
 
 static void clear_screen(void)
 {
-    for (uint32_t i = 0; i < 80 * 25; ++i) {
-        VGA[i] = 0x0720;
-    }
+    console_clear();
 }
 
 static void vga_print_at(
@@ -419,6 +414,136 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
 {
     while (*cmd_line == ' ') cmd_line++;
 
+    if (cmd_line[0] == 'u' && cmd_line[1] == 'p' && cmd_line[2] == 't' && cmd_line[3] == 'i' && cmd_line[4] == 'm' && cmd_line[5] == 'e') {
+        uint64_t ms = timer_get_uptime_ms();
+        uint32_t s = (uint32_t)(ms / 1000);
+        uint32_t m = s / 60; s %= 60;
+        uint32_t h = m / 60; m %= 60;
+        kprint("Uptime del sistema: ");
+        if (h > 0) { kprint_dec(h); kprint("h "); }
+        if (m > 0 || h > 0) { kprint_dec(m); kprint("m "); }
+        kprint_dec(s); kprint("s (");
+        kprint_dec((uint32_t)ms); kprint(" ms totales)\n");
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "Uptime: ");
+        fb_put_dec(out_buf, max_out, &p, (uint32_t)(ms / 1000));
+        fb_puts(out_buf, max_out, &p, " segundos.");
+        return 1;
+    } else if (cmd_line[0] == 's' && cmd_line[1] == 'l' && cmd_line[2] == 'e' && cmd_line[3] == 'e' && cmd_line[4] == 'p' && cmd_line[5] == ' ') {
+        const char *arg = cmd_line + 6;
+        while (*arg == ' ') arg++;
+        uint32_t ms = 0;
+        while (*arg >= '0' && *arg <= '9') { ms = ms * 10 + (*arg++ - '0'); }
+        if (ms == 0) ms = 1000;
+        kprint("Durmiendo "); kprint_dec(ms); kprint(" ms con HLT...\n");
+        timer_sleep_ms(ms);
+        kprint("Despierto.\n");
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "Sleep completado.");
+        return 1;
+    } else if (cmd_line[0] == 'd' && cmd_line[1] == 'n' && cmd_line[2] == 's' && cmd_line[3] == ' ') {
+        const char *name = cmd_line + 4;
+        while (*name == ' ') name++;
+        char domain[64]; uint32_t di = 0;
+        while (*name && *name != ' ' && di < sizeof(domain) - 1) domain[di++] = *name++;
+        domain[di] = '\0';
+        uint8_t ip[4];
+        kprint("DNS resolviendo '"); kprint(domain); kprint("'...\n");
+        if (dns_resolve(domain, ip, 3000)) {
+            kprint("IP resuelta: "); kprint_ip(ip); kprint("\n");
+            uint32_t p = 0;
+            fb_puts(out_buf, max_out, &p, "DNS ");
+            fb_puts(out_buf, max_out, &p, domain);
+            fb_puts(out_buf, max_out, &p, " -> ");
+            for (int k = 0; k < 4; ++k) {
+                fb_put_dec(out_buf, max_out, &p, ip[k]);
+                if (k != 3) fb_putc(out_buf, max_out, &p, '.');
+            }
+        } else {
+            kprint("Fallo resolucion DNS.\n");
+            uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Error resolviendo DNS.");
+        }
+        return 1;
+    } else if (cmd_line[0] == 'c' && cmd_line[1] == 'u' && cmd_line[2] == 'r' && cmd_line[3] == 'l' && cmd_line[4] == ' ') {
+        const char *p = cmd_line + 5;
+        while (*p == ' ') p++;
+        char target[64];
+        uint32_t ti = 0;
+        while (*p && *p != ' ' && ti < sizeof(target) - 1) {
+            target[ti++] = *p++;
+        }
+        target[ti] = '\0';
+        while (*p == ' ') p++;
+
+        if (ti == 0) {
+            kprint("Uso: curl <dominio|ip> [puerto] [ruta]\n");
+            return 1;
+        }
+
+        uint16_t port = 80;
+        if (*p >= '0' && *p <= '9') {
+            port = 0;
+            while (*p >= '0' && *p <= '9') port = port * 10 + (*p++ - '0');
+        }
+        while (*p == ' ') p++;
+        const char *path = (*p) ? p : "/";
+
+        int is_ip = 1;
+        int dots = 0;
+        for (int i = 0; target[i]; ++i) {
+            if (target[i] == '.') dots++;
+            else if (target[i] < '0' || target[i] > '9') is_ip = 0;
+        }
+        if (dots != 3) is_ip = 0;
+
+        uint8_t tip[4];
+        const char *host_hdr = 0;
+
+        if (is_ip) {
+            parse_ip(target, tip);
+        } else {
+            kprint("DNS resolviendo '"); kprint(target); kprint("'...\n");
+            if (!dns_resolve(target, tip, 3000)) {
+                kprint("Error: no se pudo resolver el dominio '"); kprint(target); kprint("'\n");
+                uint32_t pos = 0;
+                fb_puts(out_buf, max_out, &pos, "Error resolviendo DNS para curl.");
+                return 1;
+            }
+            kprint("IP resuelta: "); kprint_ip(tip); kprint("\n");
+            host_hdr = target;
+        }
+
+        kprint("HTTP GET a ");
+        if (host_hdr) { kprint(host_hdr); kprint(" ("); kprint_ip(tip); kprint(")"); }
+        else { kprint_ip(tip); }
+        kprint(":"); kprint_dec(port); kprint(path); kprint("...\n");
+
+        static char http_buf[4096];
+        struct http_response resp;
+        int code = http_get_host(tip, port, host_hdr, path, http_buf, sizeof(http_buf), &resp, 10000);
+        if (code >= 0) {
+            kprint("\n--- RESPUESTA HTTP [Status "); kprint_dec((uint32_t)code); kprint("] ---\n");
+            if (resp.body && resp.body[0] != '\0') {
+                kprint(resp.body);
+            } else {
+                /* Si no hay body (ej: 301 Moved Permanently), mostramos cabeceras recibidas */
+                kprint(http_buf);
+            }
+            kprint("\n-------------------------------------\n");
+            uint32_t pos = 0;
+            fb_puts(out_buf, max_out, &pos, (resp.body && resp.body[0] != '\0') ? resp.body : http_buf);
+        } else {
+            kprint("Error en peticion HTTP (timeout o conexion cerrada).\n");
+            if (http_buf[0] != '\0') {
+                kprint("Datos parciales:\n");
+                kprint(http_buf);
+                kprint("\n");
+            }
+            uint32_t pos = 0; fb_puts(out_buf, max_out, &pos, "Error en peticion HTTP.");
+        }
+        return 1;
+    }
+
     if (cmd_line[0] == 't' && cmd_line[1] == 'e' && cmd_line[2] == 's' && cmd_line[3] == 't') {
         boot_gate_run_test_suite(out_buf, max_out);
         return 1;
@@ -616,6 +741,11 @@ static int is_valid_tool(const char *s)
     if (s[0] == 's' && s[1] == 'e' && s[2] == 'c' && s[3] == 't' && s[4] == 'o' && s[5] == 'r' && s[6] == '_') return 1;
     if (s[0] == 's' && s[1] == 'r' && s[2] == 'c' && s[3] == '_') return 1;
     if (s[0] == 't' && s[1] == 'e' && s[2] == 's' && s[3] == 't') return 1;
+    if (s[0] == 'u' && s[1] == 'p' && s[2] == 't' && s[3] == 'i' && s[4] == 'm' && s[5] == 'e') return 1;
+    if (s[0] == 's' && s[1] == 'l' && s[2] == 'e' && s[3] == 'e' && s[4] == 'p' && s[5] == ' ') return 1;
+    if (s[0] == 'd' && s[1] == 'n' && s[2] == 's' && s[3] == ' ') return 1;
+    if (s[0] == 'c' && s[1] == 'u' && s[2] == 'r' && s[3] == 'l' && s[4] == ' ') return 1;
+
     return 0;
 }
 
@@ -939,6 +1069,10 @@ static void shell_run(void)
             serial_print("Comandos disponibles:\n");
             serial_print("  help                 - Muestra esta ayuda\n");
             serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
+            serial_print("  uptime               - Tiempo de ejecucion del kernel\n");
+            serial_print("  sleep <ms>           - Suspende la CPU con HLT durante N milisegundos\n");
+            serial_print("  dns <dominio>        - Consulta de registro A en servidor DNS\n");
+            serial_print("  curl <host|ip> [pt]  - Peticion HTTP GET con resolucion DNS y cabecera Host\n");
             serial_print("  health               - Verifica estado del servidor LLM\n");
             serial_print("  llm <mensaje>        - Consulta general a nail-35b\n");
             serial_print("  llm-diag [pregunta]  - Telemetria + Diagnostico del kernel por IA\n");
@@ -1232,6 +1366,10 @@ void kernel_main(void)
     serial_init();
     idt_init();
     timer_calibrate_tsc();
+    timer_init(1000); /* PIT IRQ0 a 1000 Hz (1 ms tick) */
+    kprint("PIT: IRQ0 activo a 1000 Hz (ticks de 1 ms)\n");
+    __asm__ volatile ("sti");
+    kprint("CPU: Interrupciones de hardware habilitadas (STI OK)\n");
     kprint("TSC: Calibrado con PIT a "); kprint_dec((uint32_t)tsc_freq_mhz);
     kprint(" MHz ("); kprint_dec((uint32_t)tsc_ticks_per_ms); kprint(" ticks/ms)\n");
 

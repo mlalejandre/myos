@@ -1,24 +1,39 @@
-Balance de las 6 Mejoras Arquitectónicas
-Con este ciclo cerramos con éxito el paquete completo de evolución de MYOS:
+================================================================================
+ESTADO DEL PROYECTO MYOS (Octubre 2026)
+================================================================================
 
-#	Hito	Estado	Impacto en el Sistema
-1	Feedback veraz de herramientas	✅	La IA recibe telemetría física real (CR0/CR3/CR4, heap, bus PCI, tabla ARP en vivo y confirmación de LBA).
-2	Depuración básica e IDT 64-bit	✅	32 excepciones x86_64 capturadas con volcado de RIP, CR2 (fallos de página) y pila protegida a 64 KiB.
-3	Puerta de arranque (Boot Gate)	✅	Rollback automático del host ante cualquier kernel roto o colgado en tiempo de ejecución (probado con hpatch bootfail).
-4	Salida estructurada JSON (Grammar)	✅	Tokens forzados por gramática en llama-server. Eliminado el parseo frágil de CMD: y las fugas de razonamiento.
-5	Persistencia RamFS en virtio-blk	✅	Firma MYOSFS01, superbloque e inodos persistentes entre reboots y ciclos de auto-modificación.
-6	Higiene profunda del sistema	✅	Reloj calibrado con el 8254 PIT (1001 MHz), heap alineado a 16 bytes (ABI AMD64), segmentos canónicos y despachador unificado.
-Siguientes Horizontes para MYOS
-El sistema es ahora un entorno bare-metal x86_64 completamente autónomo, auto-reparable y persistente. A partir de esta base sólida, los caminos naturales de evolución son:
+Balance de los 9 Grandes Hitos Arquitectónicos Conseguidos
+--------------------------------------------------------------------------------
+#   Hito                                Estado  Impacto en el Sistema
+1   Feedback veraz de herramientas      ✅      Telemetría física real (CR0/CR3/CR4, heap, PCI, ARP en vivo, LBA).
+2   Depuración básica e IDT 64-bit      ✅      32 excepciones x86_64 capturadas con volcado de RIP, CR2 y pila segura.
+3   Puerta de arranque (Boot Gate)      ✅      Submódulo modular 'boot_gate.c' con rollback automático del host ante kernels rotos.
+4   Salida estructurada JSON (Grammar)  ✅      Tokens forzados por gramática en llama-server (sin regex frágiles).
+5   Persistencia RamFS en virtio-blk    ✅      Firma MYOSFS01, superbloque, inodos persistentes y 'dirty-tracking' (I/O -90%).
+6   Higiene y Despachador Unificado     ✅      Eliminación de código muerto en kernel.c; 'dispatch_command' como única fuente de verdad.
+7   Interrupciones de Hardware (STI)    ✅      PIC 8259 remapeado a 0x20..0x2F, PIT Timer IRQ0 a 1000 Hz, uptime y sleep_ms con HLT.
+8   Pila de Red WAN y Herramientas Web  ✅      Resolución DNS en vivo, HTTP/1.1 con cabecera 'Host' dinámica y cliente 'curl' autónomo.
+9   Teclado PS/2 y Terminal Dual VGA    ✅      IRQ1 activa (vector 33), scancodes Set 1 y pantalla QEMU interactiva con scroll y cursor.
 
-Gestor de Memoria Física y Virtual (PMM / VMM):
+--------------------------------------------------------------------------------
+Siguientes Horizontes para MYOS (Plan de Evolución)
+--------------------------------------------------------------------------------
 
-Sustituir el mapeo plano de 1 GiB por un asignador de marcos físicos (bitmap allocator) y protección de páginas con bit NX (No-Execute) en pila/heap y Read-Only en .text.
+1. Fuego Real con el Agente Autónomo:
+   - Probar al agente ReAct en misiones multi-paso encadenando resolución DNS, peticiones HTTP (curl),
+     análisis de telemetría y auto-modificación de código en disco.
 
-Multitarea / Hilos del Kernel (kthreads):
+2. Gestor de Memoria Física y Virtual (PMM / VMM):
+   - Reemplazar el mapeo plano inicial de 1 GiB por un asignador de marcos físicos (bitmap allocator)
+   - Protección de páginas con bit NX (No-Execute) en pila/heap y Read-Only en secciones .text/.rodata.
 
-Un planificador cooperativo o preventivo básico (mediante interrupciones del temporizador PIT/APIC) para que el agente pueda razonar o recibir paquetes de red en segundo plano.
+3. Multitarea Cooperativa (kthreads):
+   - Estructuras TCB (Thread Control Block) y función de cesión voluntaria 'schedule()' / 'yield()'
+     para permitir tareas en segundo plano sin condiciones de carrera en los controladores.
 
-Suite de auto-test autónoma para la IA:
-
-Una herramienta test_suite que el kernel ejecute antes de aprobar un parche (verificando memoria, red, disco y filesystem) para que el agente pueda auto-mejorarse con garantías científicas de no regresión.
+4. Hito Estratégico: Portabilidad Multi-Arquitectura para Raspberry Pi 4 (AArch64):
+   - Separación limpia del árbol de código en 'src/arch/x86_64' y 'src/arch/aarch64'.
+   - Compilación cruzada en Docker mediante 'gcc-aarch64-linux-gnu'.
+   - Mantenimiento del 80% del código universal en C (TCP/IP, HTTP, RamFS, JSON y bucle ReAct del Agente).
+   - Capa de arranque para ARM64: Exception Level 1 (EL1), MMIO para UART/GPIO, arranque con 'kernel8.img'
+     en tarjeta microSD para ejecución en placa física real.

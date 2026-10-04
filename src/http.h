@@ -30,6 +30,17 @@ int http_request(
     uint32_t timeout_ms
 );
 
+int http_get_host(
+    const uint8_t *ip,
+    uint16_t port,
+    const char *host,
+    const char *path,
+    char *buf,
+    uint32_t buf_size,
+    struct http_response *resp,
+    uint32_t timeout_ms
+);
+
 int http_get(
     const uint8_t *ip,
     uint16_t port,

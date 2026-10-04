@@ -19,5 +19,8 @@ void kprint_ip(const uint8_t *ip);
 int  kgetc_ready(void);
 char kgetc(void);
 int  kgetline(char *buf, uint32_t max);
+void console_clear(void);
+void keyboard_irq_handler(void);
+
 
 #endif
