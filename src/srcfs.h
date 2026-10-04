@@ -9,7 +9,13 @@
  *               indice y fuentes SRCFS en LBA 256-1023)
  *   >= 1024     libre para el usuario / la IA (sector_write)
  */
-#define SECTOR_USER_MIN 1024
+/*
+ * Mapa del disco (sectores de 512 bytes):
+ *   0 .. 1023   sistema (buzon, resultado, gate canary, fuentes SRCFS)
+ *   1024..2047  sistema de archivos persistente RamFS (MYOSFS01)
+ *   >= 2048     libre para el usuario / la IA (sector_write)
+ */
+#define SECTOR_USER_MIN 2048
 
 /* Lista los fuentes empaquetados por el host en out. Devuelve n o -1. */
 int srcfs_ls(char *out, uint32_t max);

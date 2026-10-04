@@ -21,5 +21,7 @@ int  vfs_read(const char *name, char *buf_out, uint32_t max_len);
 int  vfs_delete(const char *name);
 void vfs_list(void);
 int  vfs_format_list(char *out_buf, uint32_t max);
+int  vfs_sync(void);
+void vfs_format(void);
 
 #endif

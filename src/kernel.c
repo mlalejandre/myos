@@ -645,31 +645,6 @@ static int is_valid_tool(const char *s)
     return 0;
 }
 
-static int extract_valid_cmd(const char *text, char *out_cmd, uint32_t max)
-{
-    const char *p = text;
-    while (*p) {
-        const char *tag = find_substr(p, "CMD:");
-        if (!tag) {
-            return 0;
-        }
-        const char *cand = tag + 4;
-        while (*cand == ' ' || *cand == '`' || *cand == '\'' || *cand == '"') cand++;
-
-        if (is_valid_tool(cand)) {
-            uint32_t i = 0;
-            while (cand[i] && cand[i] != '\r' && cand[i] != '\n' &&
-                   cand[i] != '`' && cand[i] != '\'' && cand[i] != '"' && i < max - 1) {
-                out_cmd[i] = cand[i];
-                i++;
-            }
-            out_cmd[i] = '\0';
-            return 1;
-        }
-        p = tag + 4;
-    }
-    return 0;
-}
 
 /* ---- Puente host (PATCHv02) --------------------------------------
  * Buzon en LBA 1..16 (8 KiB):
@@ -805,6 +780,8 @@ static void shell_run(void)
             serial_print("  ls                   - Lista los archivos del RamFS\n");
             serial_print("  cat <archivo>        - Muestra el contenido de un archivo\n");
             serial_print("  write <arch> <texto> - Crea o sobrescribe un archivo\n");
+            serial_print("  fs-sync              - Fuerza sincronizacion de RamFS a virtio-blk\n");
+            serial_print("  fs-format            - Restaura RamFS al estado inicial de fabrica\n");
             serial_print("  rm <archivo>         - Elimina un archivo\n");
             serial_print("  mem                  - Informacion de CPU, paginacion y memoria\n");
             serial_print("  stats                - Estadisticas de trafico VirtIO-NET\n");
@@ -1002,7 +979,7 @@ static void shell_run(void)
             while (*p == ' ') p++;
             uint32_t tlen = 0; while (p[tlen]) tlen++;
             vfs_write(fn, p, tlen);
-            serial_print("Escrito '"); serial_print(fn); serial_print("'\n");
+            serial_print("Escrito y persistido en virtio-blk '"); serial_print(fn); serial_print("'\n");
         } else if (cmd[0] == 'r' && cmd[1] == 'm' && cmd[2] == ' ') {
             const char *fn = cmd + 3;
             while (*fn == ' ') fn++;
@@ -1150,8 +1127,8 @@ void kernel_main(void)
     clear_screen();
 
     pci_scan();
-    vfs_init();
     virtio_blk_init();
+    vfs_init();
 
     net_run_llm_test();
 
