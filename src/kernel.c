@@ -409,6 +409,11 @@ static uint32_t max_fb_dummy = 2048;
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
+    if (cmd_line[0] == 'c' && cmd_line[1] == 'l' && cmd_line[2] == 's') {
+        console_clear();
+        return 1;
+    }
+
     while (*cmd_line == ' ') cmd_line++;
 
     if (cmd_line[0] == 'c' && cmd_line[1] == 'r' && cmd_line[2] == 'e' && cmd_line[3] == 'a' && cmd_line[4] == 'd' && cmd_line[5] == 'o' && cmd_line[6] == 'r') {
