@@ -53,7 +53,7 @@ static int build_chat_payload_mode(const char *prompt, char *dst, uint32_t max, 
         "{\"role\":\"user\",\"content\":\"";
 
     const char *suffix_plain = "\"}],\"temperature\":0.2,\"max_tokens\":2048}";
-    const char *suffix_json  = "\"}],\"response_format\":{\"type\":\"json_object\"},\"chat_template_kwargs\":{\"enable_thinking\":false},\"temperature\":0.1,\"max_tokens\":4096}";
+    const char *suffix_json  = "\"}],\"response_format\":{\"type\":\"json_object\",\"schema\":{\"type\":\"object\",\"properties\":{\"thought\":{\"type\":\"string\"},\"action\":{\"type\":\"string\",\"enum\":[\"tool\",\"patch\",\"final\"]},\"cmd\":{\"type\":\"string\"},\"patch\":{\"type\":\"object\",\"properties\":{\"file\":{\"type\":\"string\"},\"search\":{\"type\":\"string\"},\"replace\":{\"type\":\"string\"}},\"required\":[\"file\",\"search\",\"replace\"]},\"verdict\":{\"type\":\"string\"}},\"required\":[\"thought\",\"action\",\"cmd\",\"patch\",\"verdict\"]}},\"chat_template_kwargs\":{\"enable_thinking\":false},\"temperature\":0.1,\"max_tokens\":4096}";
     const char *suffix = json_mode ? suffix_json : suffix_plain;
 
     uint32_t p = 0;

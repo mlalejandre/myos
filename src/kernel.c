@@ -719,6 +719,155 @@ static void hpatch_command(const char *arg)
     }
 }
 
+/* ---- Persistencia de la mision del agente ---------------------------
+ * Si el agente envia un parche, el kernel se reinicia. La mision y el
+ * historial se guardan en el RamFS persistente (/agent/state) y, tras el
+ * reinicio, el host arma la bandera LBA 25 para que se reanude sola.
+ * Formato:  ATTEMPTS:<n>\n<mision>\n@@HISTORY@@\n<historial>
+ */
+#define RESULT_LBA          20
+#define RESUME_FLAG_LBA     25
+#define AGENT_STATE_FILE    "/agent/state"
+#define AGENT_MAX_PATCHES   3
+#define AGENT_HIST_KEEP     1800
+#define AGENT_HIST_MARK     "\n@@HISTORY@@\n"
+
+static char history_buf[4096];
+static char agent_state_buf[4096];
+static char agent_resume_mission[512];
+static int  agent_resume_pending = 0;   /* 1 = hay una mision que reanudar */
+static int  agent_patch_attempts = 0;
+
+static void agent_state_save(const char *mission, const char *history, uint32_t hist_len)
+{
+    static uint8_t zero_sec[512];       /* BSS: a cero */
+    uint32_t pos = 0;
+    uint32_t start = hist_len > AGENT_HIST_KEEP ? hist_len - AGENT_HIST_KEEP : 0;
+
+    if (start > 0) {
+        const char *nx = find_substr(history + start, "\n- Paso ");
+        start = nx ? (uint32_t)(nx + 1 - history) : hist_len;
+    }
+
+    agent_state_buf[0] = '\0';
+    fb_puts(agent_state_buf, sizeof(agent_state_buf), &pos, "ATTEMPTS:");
+    fb_put_dec(agent_state_buf, sizeof(agent_state_buf), &pos, (uint32_t)(agent_patch_attempts + 1));
+    fb_puts(agent_state_buf, sizeof(agent_state_buf), &pos, "\n");
+    fb_puts(agent_state_buf, sizeof(agent_state_buf), &pos, mission);
+    fb_puts(agent_state_buf, sizeof(agent_state_buf), &pos, AGENT_HIST_MARK);
+    fb_puts(agent_state_buf, sizeof(agent_state_buf), &pos, history + start);
+
+    vfs_write(AGENT_STATE_FILE, agent_state_buf, pos);
+
+    /* El resultado que se lea al volver sera el de ESTE parche. */
+    virtio_blk_write(RESULT_LBA, zero_sec);
+}
+
+static void agent_state_load(void)
+{
+    static uint8_t sec[512];
+    static uint8_t res[512];
+
+    if (virtio_blk_read(RESUME_FLAG_LBA, sec) != 0 || memcmp(sec, "RESUME_REQ", 10) != 0) {
+        return;
+    }
+
+    memset(sec, 0, sizeof(sec));
+    virtio_blk_write(RESUME_FLAG_LBA, sec);      /* una reanudacion por orden del host */
+
+    if (vfs_read(AGENT_STATE_FILE, agent_state_buf, sizeof(agent_state_buf)) <= 0) {
+        return;
+    }
+    vfs_delete(AGENT_STATE_FILE);
+
+    const char *p = agent_state_buf;
+
+    if (memcmp(p, "ATTEMPTS:", 9) != 0) {
+        return;
+    }
+    p += 9;
+
+    int n = 0;
+    while (*p >= '0' && *p <= '9') {
+        n = n * 10 + (*p - '0');
+        p++;
+    }
+    if (*p == '\n') p++;
+
+    const char *hm = find_substr(p, AGENT_HIST_MARK);
+    if (!hm) {
+        return;
+    }
+
+    uint32_t m = 0;
+    while (p + m < hm && m < sizeof(agent_resume_mission) - 1) {
+        agent_resume_mission[m] = p[m];
+        m++;
+    }
+    agent_resume_mission[m] = '\0';
+    if (m == 0) {
+        return;
+    }
+
+    uint32_t pos = 0;
+    history_buf[0] = '\0';
+    fb_puts(history_buf, sizeof(history_buf), &pos, hm + (sizeof(AGENT_HIST_MARK) - 1));
+    if (pos > 0 && history_buf[pos - 1] != '\n') {
+        fb_putc(history_buf, sizeof(history_buf), &pos, '\n');
+    }
+
+    fb_puts(history_buf, sizeof(history_buf), &pos,
+            "- Paso R: el kernel se reinicio tras tu parche. Resultado segun el host: ");
+
+    if (virtio_blk_read(RESULT_LBA, res) == 0 && res[0] != 0) {
+        res[511] = 0;
+        for (int i = 0; res[i]; ++i) {
+            if (res[i] < 32 || res[i] > 126) res[i] = ' ';
+        }
+        fb_puts(history_buf, sizeof(history_buf), &pos, (const char *)res);
+    } else {
+        fb_puts(history_buf, sizeof(history_buf), &pos, "(el host no dejo resultado)");
+    }
+
+    fb_puts(history_buf, sizeof(history_buf), &pos,
+            ". Si fue aceptado, verifica el cambio con src_grep/src_cat y concluye con action final.\n");
+
+    agent_patch_attempts = n;
+    agent_resume_pending = 1;
+}
+
+/* ---- Ayudas del agente: parche estructurado y notas de formato ------ */
+
+/* Lee una clave en minusculas o, si no esta, en MAYUSCULAS. */
+static int json_get2(const char *json, const char *k1, const char *k2, char *out, uint32_t max)
+{
+    int n = llm_json_get(json, k1, out, max);
+
+    if (n <= 0) {
+        n = llm_json_get(json, k2, out, max);
+    }
+
+    return n;
+}
+
+/* Anade "- Paso N: <msg>" al historial para que el modelo no repita el fallo. */
+static void history_add_note(uint32_t *hist_len, int step, const char *msg)
+{
+    uint32_t pos = *hist_len;
+
+    if (pos + 400 > sizeof(history_buf)) {
+        return;
+    }
+
+    fb_puts(history_buf, sizeof(history_buf), &pos, "- Paso ");
+    fb_putc(history_buf, sizeof(history_buf), &pos, (char)('0' + step));
+    fb_puts(history_buf, sizeof(history_buf), &pos, ": ");
+    fb_puts(history_buf, sizeof(history_buf), &pos, msg);
+    fb_puts(history_buf, sizeof(history_buf), &pos, "\n");
+
+    *hist_len = pos;
+}
+
 /* Buffers de agente en BSS para blindar la pila */
 static char agent_prompt_buf[8192];
 static char agent_reply_buf[4096];
@@ -735,12 +884,40 @@ static void shell_run(void)
     serial_print("============================================================\n\n");
 
     for (;;) {
-        serial_print("myos> ");
-        int len = kgetline(cmd, sizeof(cmd));
+        int len;
+
+        if (agent_resume_pending == 1) {
+            /* Reanudar la mision tras un reinicio por parche. */
+            const char *pre = "agent ";
+            uint32_t ci = 0;
+            while (*pre) cmd[ci++] = *pre++;
+            for (uint32_t k = 0; agent_resume_mission[k] && ci < sizeof(cmd) - 1; ++k) {
+                cmd[ci++] = agent_resume_mission[k];
+            }
+            cmd[ci] = '\0';
+            len = (int)ci;
+            serial_print("myos> ");
+            serial_print(cmd);
+            serial_print("   [reanudacion automatica tras el reinicio]\n");
+        } else {
+            serial_print("myos> ");
+            len = kgetline(cmd, sizeof(cmd));
+        }
         if (len == 0) {
             continue;
         }
 
+        {   /* ignorar espacios iniciales (p. ej. al pegar comandos) */
+            char *s0 = cmd;
+            while (*s0 == ' ') s0++;
+            if (s0 != cmd) {
+                uint32_t k = 0;
+                while (s0[k]) { cmd[k] = s0[k]; k++; }
+                cmd[k] = '\0';
+                len = (int)k;
+            }
+            if (len == 0) continue;
+        }
         static char shell_buf[2048];
         if (dispatch_command(cmd, shell_buf, sizeof(shell_buf))) {
             continue;
@@ -800,9 +977,14 @@ static void shell_run(void)
             /* Paso inicial: bucle ReAct multi-paso */
 
             /* Bucle ReAct con Salida Estructurada JSON y Grammar */
-            static char history_buf[4096];
             uint32_t hist_len = 0;
-            history_buf[0] = '\0';
+            if (agent_resume_pending == 1) {
+                /* historial recuperado por agent_state_load() */
+                agent_resume_pending = 0;
+                while (history_buf[hist_len]) hist_len++;
+            } else {
+                history_buf[0] = '\0';
+            }
 
             uint32_t ap_len = 0;
             int finished = 0;
@@ -816,14 +998,15 @@ static void shell_run(void)
                                     "  \"thought\": \"analisis breve de la accion a tomar\",\n"
                                     "  \"action\": \"tool\" | \"patch\" | \"final\",\n"
                                     "  \"cmd\": \"herramienta a ejecutar si action==tool\",\n"
-                                    "  \"patch\": \"bloques FILE/SEARCH/REPLACE si action==patch\",\n"
+                                    "  \"patch\": {\"file\": \"src/archivo.c\", \"search\": \"texto exacto existente, una sola vez\", \"replace\": \"texto nuevo\"} (con action==patch; cadenas vacias en otro caso),\n"
                                     "  \"verdict\": \"resumen completo y detallado para el usuario si action==final\"\n"
                                     "}\n"
                                     "Herramientas validas: stats | mem | arp | pci | ping 10.0.2.2 | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto | src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto.\n"
                                     "Reglas de oro:\n"
                                     "1) Si la mision pide varias tareas (ej: leer archivo Y hacer ping), ejecuta UNA herramienta por paso hasta completar TODAS.\n"
                                     "2) Para el ping al gateway usa siempre 'ping 10.0.2.2'.\n"
-                                    "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses puntos suspensivos '...' ni respuestas vacias.\n";
+                                    "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses puntos suspensivos '...' ni respuestas vacias.\n"
+                                    "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 if (hist_len > 0) {
@@ -866,13 +1049,51 @@ static void shell_run(void)
                     serial_print("\n");
                 }
 
+                /* Parche estructurado: patch = {file, search, replace} -> bloque FILE/SEARCH/REPLACE */
+                if (find_substr(act, "patch") && patch_field[0] == '\0') {
+                    static char pf[96];
+                    static char ps[2048];
+                    static char pr[2048];
+
+                    pf[0] = '\0'; ps[0] = '\0'; pr[0] = '\0';
+                    json_get2(agent_reply_buf, "file", "FILE", pf, sizeof(pf));
+                    json_get2(agent_reply_buf, "search", "SEARCH", ps, sizeof(ps));
+                    json_get2(agent_reply_buf, "replace", "REPLACE", pr, sizeof(pr));
+
+                    if (pf[0] && ps[0]) {
+                        const char *pfp = pf;
+                        uint32_t pp = 0;
+
+                        while (*pfp == '/') pfp++;
+
+                        fb_puts(patch_field, sizeof(patch_field), &pp, "FILE: ");
+                        if (!(pfp[0] == 's' && pfp[1] == 'r' && pfp[2] == 'c' && pfp[3] == '/')) {
+                            fb_puts(patch_field, sizeof(patch_field), &pp, "src/");
+                        }
+                        fb_puts(patch_field, sizeof(patch_field), &pp, pfp);
+                        fb_puts(patch_field, sizeof(patch_field), &pp, "\n<<<<<<< SEARCH\n");
+                        fb_puts(patch_field, sizeof(patch_field), &pp, ps);
+                        fb_puts(patch_field, sizeof(patch_field), &pp, "\n=======\n");
+                        fb_puts(patch_field, sizeof(patch_field), &pp, pr);
+                        fb_puts(patch_field, sizeof(patch_field), &pp, "\n>>>>>>> REPLACE\n");
+                    }
+                }
+
                 /* 1. Accion: Parche al host */
                 if (find_substr(act, "patch") || patch_field[0] != '\0') {
                     const char *ptext = patch_field[0] ? patch_field : agent_reply_buf;
                     const char *pfile = find_substr(ptext, "FILE: src/");
                     if (pfile) {
                         serial_print("\n[AGENTE AUTONOMO]: Parche estructurado emitido. Enviando al host...\n");
+                        if (agent_patch_attempts >= AGENT_MAX_PATCHES) {
+                            serial_print("\n[AGENTE AUTONOMO]: limite de parches por mision alcanzado; no se envia.\n");
+                            finished = 1;
+                            break;
+                        }
+                        agent_state_save(mission, history_buf, hist_len);
                         host_submit_patch(pfile);
+                        /* Solo se llega aqui si el envio fallo: descartar el estado. */
+                        vfs_delete(AGENT_STATE_FILE);
                         finished = 1;
                         break;
                     }
@@ -926,6 +1147,10 @@ static void shell_run(void)
 
                 serial_print("\n[AVISO IA]: Respuesta incompleta o no estructurada recibida del modelo:\n");
                 serial_print(agent_reply_buf);
+                history_add_note(&hist_len, step,
+                    "tu respuesta fue rechazada por formato: usa action=tool con cmd, "
+                    "action=patch con patch={file,search,replace} (cadenas no vacias) "
+                    "o action=final con verdict.");
                 serial_print("\nReintentando paso...\n");
             }            if (!finished) {
                 serial_print("\nMision concluida.\n\n");
@@ -1250,6 +1475,8 @@ void kernel_main(void)
     if (llm_test_passed) {
         serial_print("SYSTEM STATUS: AUTONOMOUS AI LINK ESTABLISHED\n");
     }
+
+    agent_state_load();
 
     shell_run();
 }
