@@ -1,5 +1,6 @@
 #ifndef MYOS_CONSOLE_H
 #define MYOS_CONSOLE_H
+/* hpatch ok */
 
 #include <stdint.h>
 
