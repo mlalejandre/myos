@@ -1015,6 +1015,40 @@ static char agent_prompt_buf[8192];
 static char agent_reply_buf[4096];
 static char tool_feedback_buf[2048];
 
+/* ---- Subsistema de Memoria Persistente Categorizada ------------- */
+static void inject_agent_memory(char *dst, uint32_t max, uint32_t *pos)
+{
+    static const char *const mem_files[] = {
+        "/etc/mem_user.txt",
+        "/etc/mem_hw.txt",
+        "/etc/mem_kernel.txt"
+    };
+    static const char *const mem_labels[] = {
+        "- Usuario/Identidad: ",
+        "- Hardware/Red: ",
+        "- Codigo/Kernel: "
+    };
+
+    int any = 0;
+    char buf[384];
+
+    for (int i = 0; i < 3; ++i) {
+        int n = vfs_read(mem_files[i], buf, sizeof(buf));
+        if (n > 0) {
+            if (!any) {
+                fb_puts(dst, max, pos, "\n[MEMORIA PERMANENTE APRENDIDA EN MISIONES ANTERIORES]:\n");
+                any = 1;
+            }
+            fb_puts(dst, max, pos, mem_labels[i]);
+            while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
+                buf[--n] = '\0';
+            }
+            fb_puts(dst, max, pos, buf);
+            fb_puts(dst, max, pos, "\n");
+        }
+    }
+}
+
 static void shell_run(void)
 {
     char cmd[512];
@@ -1145,14 +1179,23 @@ static void shell_run(void)
                                     "  \"patch\": {\"file\": \"src/archivo.c\", \"search\": \"texto exacto existente, una sola vez\", \"replace\": \"texto nuevo\"} (con action==patch; cadenas vacias en otro caso),\n"
                                     "  \"verdict\": \"resumen completo y detallado para el usuario si action==final\"\n"
                                     "}\n"
-                                    "Herramientas validas: stats | mem | arp | pci | ping 10.0.2.2 | ls | cat /archivo | write /archivo texto | rm /archivo | sector_read LBA | sector_write LBA texto | src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto.\n"
+                                    "Herramientas validas:\n"
+                                    "- Diagnostico/Sistema: stats | mem | arp | pci | ping 10.0.2.2 | uptime | sleep MS | test_suite\n"
+                                    "- Red/Internet: dns DOMINIO | curl HOST [PUERTO] [RUTA]\n"
+                                    "- Archivos/Memoria: ls | cat /archivo | write /archivo texto | rm /archivo\n"
+                                    "- Disco/Sectores: sector_read LBA | sector_write LBA texto\n"
+                                    "- Codigo Fuente: src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto\n"
                                     "Reglas de oro:\n"
-                                    "1) Si la mision pide varias tareas (ej: leer archivo Y hacer ping), ejecuta UNA herramienta por paso hasta completar TODAS.\n"
-                                    "2) Para el ping al gateway usa siempre 'ping 10.0.2.2'.\n"
-                                    "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses puntos suspensivos '...' ni respuestas vacias.\n"
+                                    "1) Si la mision pide varias tareas (ej: resolver DNS y hacer curl), ejecuta UNA herramienta por paso hasta completar TODAS.\n"
+                                    "2) Para verificar el estado general del kernel ejecuta 'test_suite'.\n"
+                                    "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses respuestas vacias ni '...'.\n"
                                     "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n"
-                                    "5) Si el historial indica que tu parche fue aprobado (BOOT_OK), NO envies mas parches: comprueba el archivo y concluye con action=\"final\".\n";
+                                    "5) Si el historial indica que tu parche fue aprobado (BOOT_OK), NO envies mas parches: comprueba el archivo y concluye con action=\"final\".\n"
+                                    "6) MEMORIA A LARGO PLAZO: Para recordar aprendizajes permanentes entre misiones, escribe de forma concisa con 'write' en /etc/mem_user.txt (usuario/identidad), /etc/mem_hw.txt (red/hardware) o /etc/mem_kernel.txt (codigo).\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
+
+                /* Inyectar recuerdos persistentes aprendidos previamente */
+                inject_agent_memory(agent_prompt_buf, sizeof(agent_prompt_buf), &ap_len);
 
                 if (hist_len > 0) {
                     const char *h_hdr = "Acciones ya realizadas anteriormente:\n";
