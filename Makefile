@@ -33,7 +33,8 @@ OBJS = \
 	$(BUILD)/fs.o \
 	$(BUILD)/virtio_blk.o \
 	$(BUILD)/srcfs.o \
-	$(BUILD)/idt.o
+	$(BUILD)/idt.o \
+	$(BUILD)/boot_gate.o
 
 HEADERS = $(wildcard src/*.h)
 

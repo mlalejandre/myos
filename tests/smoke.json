@@ -1,0 +1,9 @@
+[
+  {"cmd": "help", "expect": "Comandos disponibles"},
+  {"cmd": "src_ls", "expect": "kernel.c"},
+  {"cmd": "heap", "expect": "Memoria Libre"},
+  {"cmd": "ls", "expect": "/etc/hostname"},
+  {"cmd": "mem", "expect": "Long Mode"},
+  {"cmd": "ping 10.0.2.2", "expect": "Reply from"},
+  {"cmd": "health", "expect": "Servidor LLM: OK", "needs_llm": true}
+]

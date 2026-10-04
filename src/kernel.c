@@ -15,6 +15,7 @@
 #include "io.h"
 #include "srcfs.h"
 #include "idt.h"
+#include "boot_gate.h"
 
 static volatile uint16_t *const VGA =
     (uint16_t *)0xB8000;
@@ -412,7 +413,6 @@ static int pci_format_scan(char *out, uint32_t max)
 }
 
 static uint32_t max_fb_dummy = 2048;
-static int kernel_run_test_suite(char *out_buf, uint32_t max_out);
 
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
@@ -420,7 +420,7 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
     while (*cmd_line == ' ') cmd_line++;
 
     if (cmd_line[0] == 't' && cmd_line[1] == 'e' && cmd_line[2] == 's' && cmd_line[3] == 't') {
-        kernel_run_test_suite(out_buf, max_out);
+        boot_gate_run_test_suite(out_buf, max_out);
         return 1;
     }
 
@@ -937,9 +937,7 @@ static void shell_run(void)
 
         if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p' && (cmd[4] == '\0' || cmd[4] == ' ')) {
             serial_print("Comandos disponibles:\n");
-            serial_print("Comandos disponibles:\n");
             serial_print("  help                 - Muestra esta ayuda\n");
-            serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
             serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
             serial_print("  health               - Verifica estado del servidor LLM\n");
             serial_print("  llm <mensaje>        - Consulta general a nail-35b\n");
@@ -1173,73 +1171,6 @@ if (hist_len + 400 < sizeof(history_buf)) {
             }            if (!finished) {
                 serial_print("\nMision concluida.\n\n");
             }
-        } else if (cmd[0] == 'l' && cmd[1] == 's' && (cmd[2] == '\0' || cmd[2] == ' ')) {
-            vfs_list();
-        } else if (cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't' && cmd[3] == ' ') {
-            const char *fn = cmd + 4;
-            while (*fn == ' ') fn++;
-            char buf[2048];
-            int r = vfs_read(fn, buf, sizeof(buf));
-            if (r >= 0) {
-                serial_print("\n");
-                serial_print(buf);
-                serial_print("\n");
-            } else {
-                serial_print("Error: archivo no encontrado: '");
-                serial_print(fn);
-                serial_print("'\n");
-            }
-        } else if (cmd[0] == 'w' && cmd[1] == 'r' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == 'e' && cmd[5] == ' ') {
-            const char *p = cmd + 6;
-            while (*p == ' ') p++;
-            char fn[48];
-            uint32_t fi = 0;
-            while (*p && *p != ' ' && fi < sizeof(fn) - 1) {
-                fn[fi++] = *p++;
-            }
-            fn[fi] = '\0';
-            while (*p == ' ') p++;
-            uint32_t tlen = 0; while (p[tlen]) tlen++;
-            vfs_write(fn, p, tlen);
-            serial_print("Escrito y persistido en virtio-blk '"); serial_print(fn); serial_print("'\n");
-        } else if (cmd[0] == 'r' && cmd[1] == 'm' && cmd[2] == ' ') {
-            const char *fn = cmd + 3;
-            while (*fn == ' ') fn++;
-            if (vfs_delete(fn) == 0) {
-                serial_print("Eliminado '"); serial_print(fn); serial_print("'\n");
-            } else {
-                serial_print("Error: no se pudo eliminar '"); serial_print(fn); serial_print("'\n");
-            }
-        } else if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'a' && cmd[3] == 'p') {
-            size_t used = 0;
-            size_t free_b = 0;
-            kheap_stats(&used, &free_b);
-            kprint("\nESTADO DEL HEAP (kmalloc):\n");
-            kprint("-------------------------\n");
-            kprint("Base del Heap:    0x00400000 (4 MiB)\n");
-            kprint("Memoria Usada:    "); kprint_dec((uint32_t)used); kprint(" bytes\n");
-            kprint("Memoria Libre:    "); kprint_dec((uint32_t)(free_b / 1024)); kprint(" KiB\n");
-            kprint("Capacidad total:  12 MiB\n\n");
-        } else if (cmd[0] == 'p' && cmd[1] == 'i' && cmd[2] == 'n' && cmd[3] == 'g') {
-            const char *arg = cmd + 4;
-            while (*arg == ' ') arg++;
-            uint8_t target[4];
-            if (*arg) {
-                parse_ip(arg, target);
-            } else {
-                target[0] = net_gateway[0]; target[1] = net_gateway[1];
-                target[2] = net_gateway[2]; target[3] = net_gateway[3];
-            }
-            kprint("PING a "); kprint_ip(target); kprint("...\n");
-            icmp_ping(target, 1, 1500);
-        } else if (cmd[0] == 'm' && cmd[1] == 'e' && cmd[2] == 'm' && (cmd[3] == '\0' || cmd[3] == ' ')) {
-            sysinfo_print_mem();
-        } else if (cmd[0] == 's' && cmd[1] == 't' && cmd[2] == 'a' && cmd[3] == 't' && cmd[4] == 's' && (cmd[5] == '\0' || cmd[5] == ' ')) {
-            sysinfo_print_stats();
-        } else if (cmd[0] == 'a' && cmd[1] == 'r' && cmd[2] == 'p' && (cmd[3] == '\0' || cmd[3] == ' ')) {
-            net_run_arp_test();
-        } else if (cmd[0] == 'p' && cmd[1] == 'c' && cmd[2] == 'i' && (cmd[3] == '\0' || cmd[3] == ' ')) {
-            pci_scan();
         } else if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'a' && cmd[3] == 'l' && cmd[4] == 't' && cmd[5] == 'h') {
             serial_print("Comprobando /health en servidor LLM...\n");
             if (llm_health()) {
@@ -1267,10 +1198,6 @@ if (hist_len + 400 < sizeof(history_buf)) {
             serial_print("  GW: "); kprint_ip(net_gateway);
             serial_print("  MAC: "); kprint_mac(net_mac);
             serial_print("\n");
-        } else if ((cmd[0] == 's' && cmd[1] == 'r' && cmd[2] == 'c' && cmd[3] == '_') ||
-                   (cmd[0] == 's' && cmd[1] == 'e' && cmd[2] == 'c' && cmd[3] == 't' && cmd[4] == 'o' && cmd[5] == 'r' && cmd[6] == '_')) {
-            static char shell_fb[2048];
-            execute_tool_with_feedback(cmd, shell_fb, sizeof(shell_fb));
         } else if (cmd[0] == 'h' && cmd[1] == 'p' && cmd[2] == 'a' && cmd[3] == 't' && cmd[4] == 'c' && cmd[5] == 'h') {
             hpatch_command(cmd + 6);
                 } else if (cmd[0] == 'p' && cmd[1] == 'a' && cmd[2] == 'n' && cmd[3] == 'i' && cmd[4] == 'c') {
@@ -1300,163 +1227,6 @@ if (hist_len + 400 < sizeof(history_buf)) {
 }
 
 
-/* ---- Suite de Auto-Test de No Regresion (Bare-Metal) ------------- */
-static int kernel_run_test_suite(char *out_buf, uint32_t max_out)
-{
-    uint32_t pos = 0;
-    int failed = 0;
-
-    kprint("\n============================================================\n");
-    kprint("MYOS BARE-METAL TEST SUITE (Verificacion de No Regresion)\n");
-    kprint("============================================================\n");
-    fb_puts(out_buf, max_out, &pos, "[SUITE DE AUTO-TEST MYOS]:\n");
-
-    /* 1. Test de Heap y Alineacion 16-bytes (kmalloc/kfree) */
-    kprint("[TEST 1/5] Heap Allocator & Alineacion 16-bytes... ");
-    void *p1 = kmalloc(64);
-    void *p2 = kmalloc(256);
-    void *p3 = kmalloc(1024);
-    if (!p1 || !p2 || !p3 ||
-        ((uintptr_t)p1 & 0x0F) != 0 ||
-        ((uintptr_t)p2 & 0x0F) != 0 ||
-        ((uintptr_t)p3 & 0x0F) != 0) {
-        kprint("FALLO (alloc o desalineacion)\n");
-        fb_puts(out_buf, max_out, &pos, "- Heap kmalloc: FALLO\n");
-        failed++;
-    } else {
-        memset(p1, 0xAA, 64);
-        memset(p2, 0x55, 256);
-        memset(p3, 0x33, 1024);
-        uint8_t *b1 = (uint8_t *)p1;
-        uint8_t *b2 = (uint8_t *)p2;
-        int canaries_ok = (b1[0] == 0xAA && b1[63] == 0xAA && b2[0] == 0x55 && b2[255] == 0x55);
-        kfree(p2);
-        kfree(p1);
-        kfree(p3);
-        if (canaries_ok) {
-            kprint("OK (16-byte align & canaries OK)\n");
-            fb_puts(out_buf, max_out, &pos, "- Heap kmalloc: OK\n");
-        } else {
-            kprint("FALLO (corrupcion de canario)\n");
-            fb_puts(out_buf, max_out, &pos, "- Heap kmalloc: FALLO CANARIO\n");
-            failed++;
-        }
-    }
-
-    /* 2. Test de Disco VirtIO-BLK (Lectura/Escritura LBA 2048) */
-    kprint("[TEST 2/5] Disco VirtIO-BLK (Lectura/Escritura LBA 2048)... ");
-    static uint8_t sec_w[512] __attribute__((aligned(16)));
-    static uint8_t sec_r[512] __attribute__((aligned(16)));
-    for (int i = 0; i < 512; ++i) sec_w[i] = (uint8_t)(i ^ 0x5A);
-    memcpy(sec_w, "MYOS_SELFTEST_INTEGRITY_SECTOR_2048", 35);
-    if (virtio_blk_write(2048, sec_w) != 0 ||
-        virtio_blk_read(2048, sec_r) != 0 ||
-        memcmp(sec_w, sec_r, 512) != 0) {
-        kprint("FALLO de I/O en virtio-blk\n");
-        fb_puts(out_buf, max_out, &pos, "- VirtIO-BLK: FALLO\n");
-        failed++;
-    } else {
-        kprint("OK (LBA 2048 verificado)\n");
-        fb_puts(out_buf, max_out, &pos, "- VirtIO-BLK: OK\n");
-    }
-
-    /* 3. Test de Sistema de Archivos Persistente (RamFS / MYOSFS01) */
-    kprint("[TEST 3/5] Sistema de Archivos RamFS (Ciclo CRUD y sync)... ");
-    const char *tfile = "/.test_canary.tmp";
-    const char *tdata = "MYOS_FS_CANARY_VALIDATION_STRING";
-    char rdata[64];
-    memset(rdata, 0, sizeof(rdata));
-    int w_res = vfs_write(tfile, tdata, 32);
-    int r_res = vfs_read(tfile, rdata, sizeof(rdata));
-    int d_res = vfs_delete(tfile);
-    int r2_res = vfs_read(tfile, rdata, sizeof(rdata));
-    if (w_res > 0 && r_res > 0 && memcmp(rdata, tdata, 32) == 0 && d_res == 0 && r2_res < 0) {
-        kprint("OK (crear, leer, borrar, sync OK)\n");
-        fb_puts(out_buf, max_out, &pos, "- RamFS MYOSFS01: OK\n");
-    } else {
-        kprint("FALLO en operaciones VFS\n");
-        fb_puts(out_buf, max_out, &pos, "- RamFS MYOSFS01: FALLO\n");
-        failed++;
-    }
-
-    /* 4. Test de Red Bare-Metal (ARP + Ping Gateway 10.0.2.2) */
-    kprint("[TEST 4/5] Pila de Red (ARP + ICMP Ping Gateway 10.0.2.2)... ");
-    int p_res = icmp_ping(net_gateway, 777, 1200);
-    if (p_res == 1) {
-        kprint("OK (Echo Reply recibido)\n");
-        fb_puts(out_buf, max_out, &pos, "- Red (ICMP Gateway): OK\n");
-    } else {
-        kprint("FALLO (Gateway no responde)\n");
-        fb_puts(out_buf, max_out, &pos, "- Red (ICMP Gateway): FALLO\n");
-        failed++;
-    }
-
-    /* 5. Test de Enlace HTTP LLM Local (/health) */
-    kprint("[TEST 5/5] Enlace HTTP llama-server (/health)... ");
-    if (llm_health()) {
-        kprint("OK (HTTP 200 OK)\n");
-        fb_puts(out_buf, max_out, &pos, "- LLM Server: OK\n");
-    } else {
-        kprint("FALLO (Servidor LLM inalcanzable)\n");
-        fb_puts(out_buf, max_out, &pos, "- LLM Server: FALLO\n");
-        failed++;
-    }
-
-    kprint("============================================================\n");
-    if (failed == 0) {
-        kprint("RESUMEN: TODOS LOS COMPONENTES OPERATIVOS (5/5 PASADOS)\n\n");
-        fb_puts(out_buf, max_out, &pos, "Resultado: 5/5 pruebas superadas. Sistema robusto.");
-        return 0;
-    } else {
-        kprint("RESUMEN: DETECTADOS FALLOS CRITICOS EN EL KERNEL.\n\n");
-        fb_puts(out_buf, max_out, &pos, "Resultado: FALLOS DETECTADOS en la suite de auto-test.");
-        return -1;
-    }
-}
-
-/* ---- Puerta de Arranque (Canary Boot) ----------------------------- */
-#define BOOT_GATE_LBA 24
-
-static void boot_gate_check(void)
-{
-    static char gate_sec[512];
-    if (virtio_blk_read(BOOT_GATE_LBA, gate_sec) != 0) {
-        return;
-    }
-
-    if (memcmp(gate_sec, "GATE_TEST_REQ", 13) != 0) {
-        return;
-    }
-
-    boot_gate_active = 1;
-    kprint("\n============================================================\n");
-    kprint("[PUERTA DE ARRANQUE]: Verificando salud del nuevo kernel\n");
-    kprint("============================================================\n");
-
-    /* Limpiar sector para no quedar en bucle */
-    memset(gate_sec, 0, sizeof(gate_sec));
-    virtio_blk_write(BOOT_GATE_LBA, gate_sec);
-
-    /* Ejecutar Suite Completa de Auto-Test de No-Regresion */
-    static char gate_report[512];
-    if (kernel_run_test_suite(gate_report, sizeof(gate_report)) != 0) {
-        kprint("[PUERTA DE ARRANQUE] ERROR: La suite de auto-test fallo. ABORTANDO KERNEL.\n");
-        qemu_exit(0x22); /* Dispara rollback del host */
-        return;
-    }
-
-    static char canary_reply[128];
-    if (!llm_chat("Responde: OK", canary_reply, sizeof(canary_reply), 15000)) {
-        kprint("[PUERTA DE ARRANQUE] ERROR: chat completion fallo.\n");
-        qemu_exit(0x22);
-        return;
-    }
-
-    kprint("[PUERTA DE ARRANQUE] EXITO: Kernel verificado y enlace LLM activo.\n");
-    kprint("Notificando al host (aprobacion de parche)...\n");
-    boot_gate_active = 0;
-    qemu_exit(0x20); /* Codigo de salida 65 */
-}
 void kernel_main(void)
 {
     serial_init();

@@ -82,6 +82,7 @@ static int sync_file_to_disk(int i)
             return -1;
         }
     }
+    files[i].dirty = 0;
     return 0;
 }
 
@@ -135,6 +136,7 @@ static int load_file_from_disk(int i)
     memcpy(files[i].name, entry.name, FS_NAME_MAX);
     files[i].size = entry.size;
     files[i].used = entry.used;
+    files[i].dirty = 0;
     memcpy(files[i].data, entry.data, FS_DATA_MAX);
     return 0;
 }
@@ -148,6 +150,7 @@ int vfs_sync(void)
     sb.max_files = FS_MAX_FILES;
 
     uint32_t used_count = 0;
+    int any_dirty = 0;
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         if (files[i].used) {
             if (files[i].size >= FS_DATA_MAX) {
@@ -155,6 +158,9 @@ int vfs_sync(void)
                 return -1;
             }
             used_count++;
+        }
+        if (files[i].dirty) {
+            any_dirty = 1;
             if (sync_file_to_disk(i) != 0) {
                 kprint("VFS: error de I/O sincronizando archivo; sync abortada.\n");
                 return -1;
@@ -163,9 +169,11 @@ int vfs_sync(void)
     }
     sb.num_files = used_count;
 
-    if (virtio_blk_write(FS_SUPER_LBA, &sb) != 0) {
-        kprint("VFS: error de I/O escribiendo superbloque.\n");
-        return -1;
+    if (any_dirty) {
+        if (virtio_blk_write(FS_SUPER_LBA, &sb) != 0) {
+            kprint("VFS: error de I/O escribiendo superbloque.\n");
+            return -1;
+        }
     }
 
     return 0;
@@ -182,6 +190,7 @@ static int vfs_create_internal(const char *name, const char *initial_data)
             if (initial_data && len > 0) memcpy(files[i].data, initial_data, len);
             files[i].data[len] = '\0';
             files[i].size = len;
+            files[i].dirty = 1;
             return 0;
         }
     }
@@ -189,6 +198,7 @@ static int vfs_create_internal(const char *name, const char *initial_data)
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         if (!files[i].used) {
             files[i].used = 1;
+            files[i].dirty = 1;
             str_copy(files[i].name, name, FS_NAME_MAX);
             files[i].size = 0;
             if (initial_data) {
@@ -209,6 +219,7 @@ void vfs_format(void)
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         files[i].used = 0;
         files[i].size = 0;
+        files[i].dirty = 0;
         files[i].name[0] = '\0';
     }
 
@@ -228,6 +239,7 @@ void vfs_init(void)
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         files[i].used = 0;
         files[i].size = 0;
+        files[i].dirty = 0;
         files[i].name[0] = '\0';
     }
 
@@ -288,6 +300,7 @@ int vfs_write(const char *name, const char *data, uint32_t len)
             }
             files[i].data[len] = '\0';
             files[i].size = len;
+            files[i].dirty = 1;
             if (vfs_sync() != 0) {
                 return -1;
             }
@@ -325,7 +338,8 @@ int vfs_delete(const char *name)
             files[i].used = 0;
             files[i].size = 0;
             files[i].name[0] = '\0';
-            if (sync_file_to_disk(i) != 0 || vfs_sync() != 0) {
+            files[i].dirty = 1;
+            if (vfs_sync() != 0) {
                 return -1;
             }
             return 0;

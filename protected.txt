@@ -1,0 +1,4 @@
+# Archivos que el host NO permite modificar a la IA (una ruta por linea).
+# Se suman a la lista por defecto de ejecutar.py (boot.s, idt.*, io.h, srcfs.*, virtio_blk.*).
+# Ejemplo:
+# src/mem.c

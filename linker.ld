@@ -34,6 +34,10 @@ SECTIONS
         *(.bss*)
     }
 
+    __kernel_image_end = .;
+    ASSERT(__kernel_image_end <= 0x00200000,
+           "ERROR: la imagen del kernel (con BSS) invade la virtqueue de 2 MiB")
+
     /*
      * Reserva explícita para la virtqueue de VirtIO.
      *

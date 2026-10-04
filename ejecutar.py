@@ -155,12 +155,33 @@ def disarm_boot_gate() -> None:
         f.write(b"\x00" * SECTOR)
 
 
+PROTECTED_FILES = {
+    'boot.s', 'idt.c', 'idt.h', 'io.h', 'srcfs.c', 'srcfs.h',
+    'virtio_blk.c', 'virtio_blk.h', 'boot_gate.c', 'boot_gate.h'
+}
+
+
+def is_target_protected(path: Path) -> bool:
+    if path.name in PROTECTED_FILES:
+        return True
+    prot_txt = ROOT / 'protected.txt'
+    if prot_txt.exists():
+        for line in prot_txt.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if line and not line.startswith('#') and Path(line).name == path.name:
+                return True
+    return False
+
+
 def safe_target(name: str) -> Path | None:
     if "\x00" in name:
         return None
     p = (ROOT / name).resolve()          # resuelve '..' y symlinks
     src = SRC_DIR.resolve()
     if p.is_relative_to(src) and p.suffix.lower() in ALLOWED_EXT and p.is_file():
+        if is_target_protected(p):
+            print(f"[SEGURIDAD HOST] Modificacion denegada: '{p.name}' es un archivo protegido.")
+            return None
         return p
     return None
 

@@ -10,6 +10,7 @@
 struct vfs_file {
     char     name[FS_NAME_MAX];
     uint8_t  used;
+    uint8_t  dirty;   /* 1 = modificado en memoria, pendiente de escribir en disco */
     uint32_t size;
     char     data[FS_DATA_MAX];
 };
