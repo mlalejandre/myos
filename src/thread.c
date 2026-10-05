@@ -14,7 +14,7 @@ extern void thread_trampoline_asm(void);
 
 #define THREAD_STACK_BASE  0x0000000080000000ULL
 #define THREAD_SLOT_SIZE   0x00010000ULL /* 64 KiB */
-#define THREAD_STACK_PAGES 3             /* 12 KiB reales de pila */
+#define THREAD_STACK_PAGES 8             /* 12 KiB reales de pila */
 
 static struct tcb *thread_list = 0;
 static struct tcb *curr_thread = 0;
@@ -101,14 +101,15 @@ struct tcb *thread_create(const char *name, thread_func_t entry, void *arg)
     }
 
     uint64_t *sp = (uint64_t *)stack_top;
+    /* Orden inverso a switch_context: rip, rbp, rbx, r12-r15, rflags (el ultimo se pop primero) */
     *(--sp) = (uint64_t)thread_trampoline_asm;
-    *(--sp) = 0x202ULL;
-    *(--sp) = 0;
-    *(--sp) = 0;
-    *(--sp) = 0;
-    *(--sp) = 0;
-    *(--sp) = 0;
-    *(--sp) = 0;
+    *(--sp) = 0;    /* rbp */
+    *(--sp) = 0;    /* rbx */
+    *(--sp) = 0;    /* r12 */
+    *(--sp) = 0;    /* r13 */
+    *(--sp) = 0;    /* r14 */
+    *(--sp) = 0;    /* r15 */
+    *(--sp) = 0x202ULL;   /* rflags (IF=1) */
 
     t->rsp = (uint64_t)sp;
 

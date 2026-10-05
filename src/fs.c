@@ -143,7 +143,7 @@ static int load_file_from_disk(int i)
     return 0;
 }
 
-int vfs_sync(void)
+static int vfs_sync_unlocked(void)
 {
     struct fs_superblock sb;
     memset(&sb, 0, sizeof(sb));
@@ -216,7 +216,7 @@ static int vfs_create_internal(const char *name, const char *initial_data)
     return -1;
 }
 
-void vfs_format(void)
+static void vfs_format_unlocked(void)
 {
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         files[i].used = 0;
@@ -281,7 +281,7 @@ void vfs_init(void)
     vfs_format();
 }
 
-int vfs_create(const char *name, const char *initial_data)
+static int vfs_create_unlocked(const char *name, const char *initial_data)
 {
     if (!fs_initialized) vfs_init();
     int r = vfs_create_internal(name, initial_data);
@@ -319,7 +319,7 @@ int vfs_write(const char *name, const char *data, uint32_t len)
     return r == 0 ? (int)len : -1;
 }
 
-int vfs_read(const char *name, char *buf_out, uint32_t max_len)
+static int vfs_read_unlocked(const char *name, char *buf_out, uint32_t max_len)
 {
     if (!fs_initialized) vfs_init();
     if (!name || !buf_out || max_len == 0) return -1;
@@ -336,7 +336,7 @@ int vfs_read(const char *name, char *buf_out, uint32_t max_len)
     return -1;
 }
 
-int vfs_delete(const char *name)
+static int vfs_delete_unlocked(const char *name)
 {
     if (!fs_initialized) vfs_init();
 
@@ -355,7 +355,7 @@ int vfs_delete(const char *name)
     return -1;
 }
 
-void vfs_list(void)
+static void vfs_list_unlocked(void)
 {
     if (!fs_initialized) vfs_init();
 
@@ -382,7 +382,7 @@ void vfs_list(void)
     kprint(" archivos.\n\n");
 }
 
-int vfs_format_list(char *out_buf, uint32_t max)
+static int vfs_format_list_unlocked(char *out_buf, uint32_t max)
 {
     if (!fs_initialized) vfs_init();
     uint32_t pos = 0;
@@ -407,4 +407,60 @@ int vfs_format_list(char *out_buf, uint32_t max)
     }
     out_buf[pos] = '\0';
     return (int)pos;
+}
+
+
+/* ---- Envoltorios con cerrojo (mutex recursivo) ---- */
+int vfs_sync(void)
+{
+    kmutex_lock(&vfs_mutex);
+    int r = vfs_sync_unlocked();
+    kmutex_unlock(&vfs_mutex);
+    return r;
+}
+
+void vfs_format(void)
+{
+    kmutex_lock(&vfs_mutex);
+    vfs_format_unlocked();
+    kmutex_unlock(&vfs_mutex);
+}
+
+int vfs_create(const char *name, const char *initial_data)
+{
+    kmutex_lock(&vfs_mutex);
+    int r = vfs_create_unlocked(name, initial_data);
+    kmutex_unlock(&vfs_mutex);
+    return r;
+}
+
+int vfs_read(const char *name, char *buf_out, uint32_t max_len)
+{
+    kmutex_lock(&vfs_mutex);
+    int r = vfs_read_unlocked(name, buf_out, max_len);
+    kmutex_unlock(&vfs_mutex);
+    return r;
+}
+
+int vfs_delete(const char *name)
+{
+    kmutex_lock(&vfs_mutex);
+    int r = vfs_delete_unlocked(name);
+    kmutex_unlock(&vfs_mutex);
+    return r;
+}
+
+void vfs_list(void)
+{
+    kmutex_lock(&vfs_mutex);
+    vfs_list_unlocked();
+    kmutex_unlock(&vfs_mutex);
+}
+
+int vfs_format_list(char *out_buf, uint32_t max)
+{
+    kmutex_lock(&vfs_mutex);
+    int r = vfs_format_list_unlocked(out_buf, max);
+    kmutex_unlock(&vfs_mutex);
+    return r;
 }

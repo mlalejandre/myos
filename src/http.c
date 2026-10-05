@@ -119,7 +119,7 @@ static int http_request_host_unlocked(
     resp->body = 0;
     resp->body_len = 0;
 
-    uint32_t connect_timeout = timeout_ms > 8000 ? 8000 : timeout_ms;
+    uint32_t connect_timeout = timeout_ms > 30000 ? 30000 : timeout_ms;
     int h = tcp_connect(ip, port, connect_timeout);
     if (h < 0) {
         kprint("HTTP: TCP connect failed\n");

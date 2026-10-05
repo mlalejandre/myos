@@ -13,7 +13,8 @@ CFLAGS = \
 	-fno-stack-protector \
 	-fno-pie \
 	-fno-pic \
-	-mno-red-zone
+	-mno-red-zone \
+	-mgeneral-regs-only
 
 OBJS = \
 	$(BUILD)/boot.o \

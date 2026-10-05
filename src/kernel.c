@@ -566,7 +566,7 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
 
         static char http_buf[4096];
         struct http_response resp;
-        int code = http_get_host(tip, port, host_hdr, path, http_buf, sizeof(http_buf), &resp, 10000);
+        int code = http_get_host(tip, port, host_hdr, path, http_buf, sizeof(http_buf), &resp, 40000);
         if (code >= 0) {
             kprint("\n--- RESPUESTA HTTP [Status "); kprint_dec((uint32_t)code); kprint("] ---\n");
             if (resp.body && resp.body[0] != '\0') {
