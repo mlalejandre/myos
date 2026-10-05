@@ -6,7 +6,7 @@ MYOS: Autonomous AI-Native x86_64 Operating System
 Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
 
 ================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (12 / 12)
+BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (13 / 13)
 ================================================================================
 
 #   Hito                                Estado  Impacto en el Sistema
@@ -34,9 +34,10 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (12 / 12)
                                                 PIT 8254 Canal 0 activo a 1000 Hz (1 tick = 1 ms). Interrupciones activadas
                                                 con 'sti'. Comandos 'uptime' y 'sleep <ms>' con reposo real de CPU ('hlt').
 
-8   Pila de Red WAN y Cliente Web       ✅      Resolución DNS dinámica (10.0.2.3:53), HTTP/1.1 con cabecera 'Host' dinámica.
-                                                Cliente 'curl <dominio|ip> [puerto] [ruta]' capaz de conectar con la Internet
-                                                pública real (probado con éxito en Cloudflare y NeverSSL con HTTP 200 OK).
+8   Pila de Red WAN y Cliente Web       ✅      Resolución DNS dinámica con reintentos transparentes (10.0.2.3:53).
+                                                Cliente 'curl <dominio|ip> [puerto] [ruta]' con HTTP/1.1 y cabecera 'Host'
+                                                dinámica, aviso explícito de truncado ([TRUNCADO a 4096 B]) y soporte
+                                                de respuestas no estándar/bloqueos de operadora.
 
 9   Teclado PS/2 y Terminal Dual VGA    ✅      IRQ1 habilitada (vector 33), controlador de teclado PS/2 (Set 1) con buffer
                                                 circular y soporte Shift/Caps. Emulador de terminal VGA en 0xB8000 con scroll
@@ -68,20 +69,31 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (12 / 12)
                                                 - Primitivas de sincronización 'kmutex_lock / unlock' aplicadas al VFS (RamFS thread-safe).
                                                 - Recolector de basura 'thread_reap_dead' que libera pilas y marcos PMM al morir un hilo.
 
+13  Autonomía Web WAN y Persistencia    ✅      - Regla de Oro 7 (Persistencia Obligatoria / Parche Anti-Bagueza): erradicación
+    Forzada (Anti-Bagueza)                        del "guardado mental"; obligación estricta de persistir con 'write' antes de emitir 'final'.
+                                                - Autocorrección y resiliencia en red: el Agente recupera caídas transitorias de red,
+                                                  reintenta peticiones de forma autónoma y concluye tareas multi-paso complejas.
+                                                - Prueba de fuego superada: 'curl neverssl.com 80' -> auto-reintento tras timeout ->
+                                                  análisis cognitivo de JavaScript -> síntesis -> persistencia física en '/neverssl.txt'.
+
 ================================================================================
-SIGUIENTES HORIZONTES PARA MYOS (Plan de Futuro)
+PRÓXIMOS PASOS (HOJA DE RUTA PARA LA SIGUIENTE SESIÓN)
 ================================================================================
 
-Fase 4: Misiones Complejas del Agente IA sobre Sistema Multitarea
-----------------------------------------------------------------
-- Explotar la concurrencia para que el Agente lance tareas de diagnóstico o descargas en segundo plano.
-- Permitir que el agente consulte información con 'curl', sintetice resúmenes en disco y supervise el estado del sistema.
+1. Fase 4 (Consolidación Multitarea Dinámica):
+   -------------------------------------------
+   - Comando 'spawn <cmd>' o 'bg <cmd>': Permitir que la shell interactiva y el
+     Agente IA lancen cualquier comando o tarea de diagnóstico como un hilo de
+     kernel (kthread) independiente en segundo plano.
+   - Supervisión dinámica en vivo mediante el comando 'ps' / 'threads'.
 
-Fase 5 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
--------------------------------------------------------------------------------------
-- Reestructuración del árbol en 'src/arch/x86_64' y 'src/arch/aarch64'.
-- Capa de abstracción de memoria HAL: 'pmm_arch.c' y 'vmm_arch.c' aprovechando las interfaces consolidadas.
-- Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu'.
-- Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria, Kthreads).
-- Arranque bare-metal ARMv8-A (EL1, MMIO UART/GPIO, timer genérico cntvct_el0).
+2. Fase 5 (Hito Estratégico - Portabilidad Multi-Arquitectura ARM64):
+   ------------------------------------------------------------------
+   - Reestructurar el árbol de código:
+       * src/arch/x86_64/ (boot.s, switch.s, idt.*, pmm/vmm específicos)
+       * src/arch/aarch64/ (arranque bare-metal ARMv8-A en EL1, UART PL011, timer cntvct_el0)
+   - Mantener el 80% del código en C agnóstico a la arquitectura (TCP/IP, HTTP, RamFS,
+     Agente ReAct, VFS, Memory allocator y Kthreads cooperativos).
+   - Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu' y emulación en QEMU ('qemu-system-aarch64').
+   - Meta final: Arrancar MYOS bare-metal en una placa Raspberry Pi 4.
 ================================================================================

@@ -137,7 +137,6 @@ def build_tree(files: list[Path]) -> str:
     """Construye una representación tipo árbol."""
     lines = [PROJECT_ROOT.name + "/"]
 
-    # Primero construimos una estructura de árbol.
     tree = {}
 
     for file_path in files:

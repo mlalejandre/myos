@@ -567,25 +567,41 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
         static char http_buf[4096];
         struct http_response resp;
         int code = http_get_host(tip, port, host_hdr, path, http_buf, sizeof(http_buf), &resp, 40000);
+
+        uint32_t rlen = 0;
+        while (http_buf[rlen] && rlen < sizeof(http_buf)) rlen++;
+        int truncated = (rlen >= sizeof(http_buf) - 1);
+
         if (code >= 0) {
             kprint("\n--- RESPUESTA HTTP [Status "); kprint_dec((uint32_t)code); kprint("] ---\n");
-            if (resp.body && resp.body[0] != '\0') {
-                kprint(resp.body);
-            } else {
-                /* Si no hay body (ej: 301 Moved Permanently), mostramos cabeceras recibidas */
-                kprint(http_buf);
+            const char *display = (resp.body && resp.body[0] != '\0') ? resp.body : http_buf;
+            kprint(display);
+            if (truncated) {
+                kprint("\n[TRUNCADO a 4096 B]");
             }
             kprint("\n-------------------------------------\n");
             uint32_t pos = 0;
-            fb_puts(out_buf, max_out, &pos, (resp.body && resp.body[0] != '\0') ? resp.body : http_buf);
+            fb_puts(out_buf, max_out, &pos, display);
+            if (truncated) {
+                fb_puts(out_buf, max_out, &pos, "\n[TRUNCADO a 4096 B]");
+            }
+        } else if (http_buf[0] != '\0') {
+            kprint("\n--- RESPUESTA RECIBIDA (AVISO: no es HTTP valido) ---\n");
+            kprint(http_buf);
+            if (truncated) {
+                kprint("\n[TRUNCADO a 4096 B]");
+            }
+            kprint("\n----------------------------------------------------\n");
+            uint32_t pos = 0;
+            fb_puts(out_buf, max_out, &pos, "[AVISO: no es HTTP valido]\n");
+            fb_puts(out_buf, max_out, &pos, http_buf);
+            if (truncated) {
+                fb_puts(out_buf, max_out, &pos, "\n[TRUNCADO a 4096 B]");
+            }
         } else {
             kprint("Error en peticion HTTP (timeout o conexion cerrada).\n");
-            if (http_buf[0] != '\0') {
-                kprint("Datos parciales:\n");
-                kprint(http_buf);
-                kprint("\n");
-            }
-            uint32_t pos = 0; fb_puts(out_buf, max_out, &pos, "Error en peticion HTTP.");
+            uint32_t pos = 0;
+            fb_puts(out_buf, max_out, &pos, "Error en peticion HTTP (timeout o conexion cerrada).");
         }
         return 1;
     }
@@ -1223,7 +1239,8 @@ static void shell_run(void)
                                     "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses respuestas vacias ni '...'.\n"
                                     "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n"
                                     "5) Si el historial indica que tu parche fue aprobado (BOOT_OK), NO envies mas parches: comprueba el archivo y concluye con action=\"final\".\n"
-                                    "6) AUTO-EVOLUCION Y MEMORIA: Si creas o modificas una herramienta o comando, anota SIEMPRE con 'write' en /etc/mem_kernel.txt el nombre del comando y que hace para recordarlo en futuras misiones.\n";
+                                    "6) AUTO-EVOLUCION Y MEMORIA: Si creas o modificas una herramienta o comando, anota SIEMPRE con 'write' en /etc/mem_kernel.txt el nombre del comando y que hace para recordarlo en futuras misiones.\n"
+                                    "7) PERSISTENCIA OBLIGATORIA: Si la mision pide guardar, registrar, volcar o escribir datos en un archivo, es ESTRICTAMENTE OBLIGATORIO ejecutar 'write /archivo texto' ANTES de emitir action=\"final\". Queda terminantemente prohibido concluir alegando que se guardo mentalmente o que el analisis es suficiente.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 /* Inyectar recuerdos persistentes aprendidos previamente */
@@ -1237,7 +1254,7 @@ static void shell_run(void)
                     }
                 }
 
-                const char *p_rules = "\nInstruccion: Analiza el historial, determina que falta para completar la mision y genera el JSON.";
+                const char *p_rules = "\nInstruccion: Analiza el historial. Si la mision requeria guardar o escribir un archivo y aun no has ejecutado write, debes ejecutar la herramienta write ahora antes de emitir tu dictamen final. Genera el JSON.";
                 while (*p_rules && ap_len < sizeof(agent_prompt_buf) - 1) agent_prompt_buf[ap_len++] = *p_rules++;
                 agent_prompt_buf[ap_len] = '\0';
 

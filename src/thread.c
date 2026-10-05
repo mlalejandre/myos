@@ -14,7 +14,7 @@ extern void thread_trampoline_asm(void);
 
 #define THREAD_STACK_BASE  0x0000000080000000ULL
 #define THREAD_SLOT_SIZE   0x00010000ULL /* 64 KiB */
-#define THREAD_STACK_PAGES 8             /* 12 KiB reales de pila */
+#define THREAD_STACK_PAGES 8             /* 32 KiB reales de pila */
 
 static struct tcb *thread_list = 0;
 static struct tcb *curr_thread = 0;

@@ -117,103 +117,113 @@ static int dns_build_query(const char *name, uint16_t id, uint8_t *q, int cap)
 
 static int dns_resolve_unlocked(const char *name, uint8_t *ip_out, uint32_t timeout_ms)
 {
-    uint8_t query[256];
-    uint16_t id = dns_next_id++;
-
-    int qlen = dns_build_query(name, id, query, sizeof(query));
-
-    if (qlen < 0) {
-        kprint("DNS: invalid name\n");
-        return 0;
-    }
-
     if (udp_bind(DNS_LOCAL_PORT) != 0) {
         kprint("DNS: cannot bind local port\n");
         return 0;
     }
 
-    int ok = 0;
-
-    if (udp_sendto(net_dns, DNS_PORT, DNS_LOCAL_PORT, query,
-                   (uint16_t)qlen) != 0)
-    {
-        kprint("DNS: send failed\n");
-        udp_unbind(DNS_LOCAL_PORT);
-        return 0;
+    uint32_t per_try = timeout_ms / 3;
+    if (per_try < 1000) {
+        per_try = 1000;
     }
 
+    int ok = 0;
+    uint8_t query[256];
     uint8_t resp[512];
     uint8_t from_ip[4];
     uint16_t from_port;
 
-    for (int tries = 0; tries < 4 && !ok; ++tries) {
+    for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
+        uint16_t id = dns_next_id++;
+        int qlen = dns_build_query(name, id, query, sizeof(query));
 
-        int len = udp_recvfrom(DNS_LOCAL_PORT, resp, sizeof(resp),
-                               from_ip, &from_port, timeout_ms);
-
-        if (len <= 0) {
-            kprint("DNS: timeout\n");
-            break;
+        if (qlen < 0) {
+            kprint("DNS: invalid name\n");
+            udp_unbind(DNS_LOCAL_PORT);
+            return 0;
         }
 
-        if (len < DNS_HEADER_LEN || rd16(resp) != id) {
-            continue;       /* respuesta ajena: seguir esperando */
+        if (udp_sendto(net_dns, DNS_PORT, DNS_LOCAL_PORT, query,
+                       (uint16_t)qlen) != 0)
+        {
+            kprint("DNS: send failed\n");
+            continue;
         }
 
-        uint16_t flags = rd16(resp + 2);
-        uint16_t rcode = flags & 0x000F;
+        for (int tries = 0; tries < 4 && !ok; ++tries) {
 
-        if (!(flags & 0x8000) || rcode != 0) {
-            kprint("DNS: server error, rcode=");
-            kprint_dec(rcode);
-            kprint("\n");
-            break;
-        }
+            int len = udp_recvfrom(DNS_LOCAL_PORT, resp, sizeof(resp),
+                                   from_ip, &from_port, per_try);
 
-        int qd = rd16(resp + 4);
-        int an = rd16(resp + 6);
-        int off = DNS_HEADER_LEN;
-
-        for (int i = 0; i < qd; ++i) {
-
-            off = dns_skip_name(resp, len, off);
-
-            if (off < 0) break;
-
-            off += 4;
-        }
-
-        for (int i = 0; i < an && off > 0; ++i) {
-
-            off = dns_skip_name(resp, len, off);
-
-            if (off < 0 || off + 10 > len) break;
-
-            uint16_t type  = rd16(resp + off);
-            uint16_t cls   = rd16(resp + off + 2);
-            uint16_t rdlen = rd16(resp + off + 8);
-
-            off += 10;
-
-            if (off + rdlen > len) break;
-
-            if (type == DNS_TYPE_A && cls == DNS_CLASS_IN && rdlen == 4) {
-
-                for (int k = 0; k < 4; ++k) {
-                    ip_out[k] = resp[off + k];
-                }
-
-                ok = 1;
+            if (len <= 0) {
                 break;
             }
 
-            off += rdlen;
-        }
+            if (len < DNS_HEADER_LEN || rd16(resp) != id) {
+                continue;       /* respuesta ajena: seguir esperando */
+            }
 
-        if (!ok) {
-            kprint("DNS: no A record in response\n");
-            break;
+            uint16_t flags = rd16(resp + 2);
+            uint16_t rcode = flags & 0x000F;
+
+            if (!(flags & 0x8000) || rcode != 0) {
+                kprint("DNS: server error, rcode=");
+                kprint_dec(rcode);
+                kprint("\n");
+                udp_unbind(DNS_LOCAL_PORT);
+                return 0;
+            }
+
+            int qd = rd16(resp + 4);
+            int an = rd16(resp + 6);
+            int off = DNS_HEADER_LEN;
+
+            for (int i = 0; i < qd; ++i) {
+
+                off = dns_skip_name(resp, len, off);
+
+                if (off < 0) break;
+
+                off += 4;
+            }
+
+            for (int i = 0; i < an && off > 0; ++i) {
+
+                off = dns_skip_name(resp, len, off);
+
+                if (off < 0 || off + 10 > len) break;
+
+                uint16_t type  = rd16(resp + off);
+                uint16_t cls   = rd16(resp + off + 2);
+                uint16_t rdlen = rd16(resp + off + 8);
+
+                off += 10;
+
+                if (off + rdlen > len) break;
+
+                if (type == DNS_TYPE_A && cls == DNS_CLASS_IN && rdlen == 4) {
+
+                    for (int k = 0; k < 4; ++k) {
+                        ip_out[k] = resp[off + k];
+                    }
+
+                    ok = 1;
+                    break;
+                }
+
+                off += rdlen;
+            }
+
+            if (!ok) {
+                kprint("DNS: no A record in response\n");
+                udp_unbind(DNS_LOCAL_PORT);
+                return 0;
+            }
         }
+    }
+
+    if (!ok) {
+        kprint("DNS: timeout\n");
     }
 
     udp_unbind(DNS_LOCAL_PORT);
