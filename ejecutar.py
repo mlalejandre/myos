@@ -428,6 +428,7 @@ def main() -> int:
             "-cdrom", "build/myos.iso", "-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0",
             "-drive", "file=hdd.img,format=raw,if=virtio",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+            "-object", "filter-dump,id=f1,netdev=net0,file=build/net.pcap",
             "-serial", "stdio",
         ]
 
