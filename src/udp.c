@@ -256,7 +256,7 @@ int udp_recvfrom(
             return 0;
         }
 
-        net_poll();
+        net_wait_step();
 
         cpu_pause();
     }

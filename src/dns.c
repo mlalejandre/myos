@@ -115,7 +115,7 @@ static int dns_build_query(const char *name, uint16_t id, uint8_t *q, int cap)
 }
 
 
-int dns_resolve(const char *name, uint8_t *ip_out, uint32_t timeout_ms)
+static int dns_resolve_unlocked(const char *name, uint8_t *ip_out, uint32_t timeout_ms)
 {
     uint8_t query[256];
     uint16_t id = dns_next_id++;
@@ -262,4 +262,13 @@ void net_run_dns_test(void)
     } else {
         kprint("NET: UDP layer FAILED\n");
     }
+}
+
+
+int dns_resolve(const char *name, uint8_t *ip_out, uint32_t timeout_ms)
+{
+    net_lock();
+    int r = dns_resolve_unlocked(name, ip_out, timeout_ms);
+    net_unlock();
+    return r;
 }

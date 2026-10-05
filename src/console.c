@@ -218,7 +218,7 @@ char kgetc(void)
 {
     while (!kgetc_ready()) {
         thread_yield();
-        cpu_pause();
+        __asm__ volatile ("sti; hlt");   /* el tick de 1 kHz nos despierta */
     }
     if (kbd_head != kbd_tail) {
         char ch = kbd_buf[kbd_tail];

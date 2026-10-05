@@ -603,7 +603,7 @@ int tcp_connect(const uint8_t *dst_ip, uint16_t dst_port, uint32_t timeout_ms)
                 return -1;
             }
 
-            net_poll();
+            net_wait_step();
             cpu_pause();
         }
     }
@@ -636,7 +636,7 @@ static int tcp_wait_ack(struct tcp_conn *c, uint32_t target, uint32_t timeout_ms
             return 0;
         }
 
-        net_poll();
+        net_wait_step();
         cpu_pause();
     }
 }
@@ -752,7 +752,7 @@ int tcp_recv(int h, void *buf, uint16_t max, uint32_t timeout_ms)
             return 0;
         }
 
-        net_poll();
+        net_wait_step();
         cpu_pause();
     }
 }
@@ -788,7 +788,7 @@ int tcp_close(int h)
                     break;
                 }
 
-                net_poll();
+                net_wait_step();
                 cpu_pause();
             }
 

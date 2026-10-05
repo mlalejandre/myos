@@ -271,7 +271,7 @@ void ip_input(const uint8_t *frame, uint16_t len)
 /* Ping                                                             */
 /* ---------------------------------------------------------------- */
 
-int icmp_ping(const uint8_t *dst_ip, uint16_t seq, uint32_t timeout_ms)
+static int icmp_ping_unlocked(const uint8_t *dst_ip, uint16_t seq, uint32_t timeout_ms)
 {
     uint8_t req[ICMP_HLEN + PING_DATA_LEN];
 
@@ -298,7 +298,7 @@ int icmp_ping(const uint8_t *dst_ip, uint16_t seq, uint32_t timeout_ms)
 
     while ((rdtsc() - start) < limit) {
 
-        net_poll();
+        net_wait_step();
 
         if (ping_got && ping_seq == seq) {
 
@@ -390,4 +390,13 @@ void net_run_ping_test(void)
     } else {
         kprint("NET: IPv4 + ICMP layer FAILED\n");
     }
+}
+
+
+int icmp_ping(const uint8_t *dst_ip, uint16_t seq, uint32_t timeout_ms)
+{
+    net_lock();
+    int r = icmp_ping_unlocked(dst_ip, seq, timeout_ms);
+    net_unlock();
+    return r;
 }

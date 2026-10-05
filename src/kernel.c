@@ -411,7 +411,6 @@ static int pci_format_scan(char *out, uint32_t max)
     return (int)pos;
 }
 
-static uint32_t max_fb_dummy = 2048;
 
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
@@ -634,7 +633,7 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
         vfs_write(fn, p, tlen);
         kprint("Escrito y persistido en virtio-blk '"); kprint(fn); kprint("'\n");
         const char *succ = "Archivo escrito y persistido correctamente en disco virtio-blk.";
-        uint32_t i = 0; while (succ[i] && i < max_fb_dummy - 1 && i < max_out - 1) { out_buf[i] = succ[i]; i++; } out_buf[i] = '\0';
+        uint32_t i = 0; while (succ[i] && i < max_out - 1) { out_buf[i] = succ[i]; i++; } out_buf[i] = '\0';
         return 1;
     } else if (cmd_line[0] == 'r' && cmd_line[1] == 'm' && cmd_line[2] == ' ') {
         const char *fn = cmd_line + 3;

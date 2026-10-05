@@ -1,170 +1,61 @@
 #!/usr/bin/env python3
-"""
-parche.py - Fase 3 (Cierre): Consolidacion de Hito 12 en dondeestamos.txt y smoke tests
-"""
-
+"""parche.py (2b) - corrige la alineacion de pila en thread_trampoline_asm."""
 from pathlib import Path
-import subprocess
-import shutil
-import time
+import shutil, subprocess, time, sys
 
 ROOT = Path(__file__).resolve().parent
-SRC = ROOT / "src"
-DOCKER_IMAGE = "myos-toolchain"
+BACKUP = ROOT / ".parche_backup"
+IMG = "myos-toolchain"
+
+EDITS = {
+"src/switch.s": [(
+"""    subq $8, %rsp
+    call thread_trampoline_c
+    addq $8, %rsp
+    call thread_exit""",
+"""    /* FIX: %rsp ya es multiplo de 16 aqui; 'call' empuja el retorno.
+       Restar 8 dejaba toda la pila del hilo desalineada (#GP con SSE). */
+    call thread_trampoline_c
+    call thread_exit""")],
+}
 
 
-def safe_write(path: Path, text: str):
-    path.unlink(missing_ok=True)
-    time.sleep(0.1)
-    path.write_text(text, encoding="utf-8")
+def main() -> int:
+    new = {}
+    for rel, edits in EDITS.items():
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for old, rep in edits:
+            n = text.count(old)
+            if n != 1:
+                print(f"[ABORTO] {rel}: SEARCH aparece {n} veces: {old[:60]!r}")
+                return 1
+            text = text.replace(old, rep, 1)
+        new[rel] = text
+
+    shutil.rmtree(BACKUP, ignore_errors=True)
+    for rel in new:
+        dst = BACKUP / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / rel, dst)
+
+    for rel, text in new.items():
+        p = ROOT / rel
+        p.unlink(missing_ok=True)
+        p.write_text(text, encoding="utf-8")
+        print(f"[OK] {rel}")
     time.sleep(0.8)
 
-
-def update_smoke_tests():
-    smoke = ROOT / "tests" / "smoke.json"
-    safe_write(smoke, r"""[
-  {"cmd": "help", "expect": "Comandos disponibles"},
-  {"cmd": "src_ls", "expect": "kernel.c"},
-  {"cmd": "pmm", "expect": "SUPERADO CON EXITO"},
-  {"cmd": "vmm", "expect": "SUPERADO CON EXITO"},
-  {"cmd": "heap", "expect": "SUPERADO CON EXITO"},
-  {"cmd": "threads", "expect": "SUPERADO CON EXITO"},
-  {"cmd": "ps", "expect": "SUPERADO CON EXITO"},
-  {"cmd": "cat /sys/telemetry.txt", "expect": "MYOS TELEMETRY BACKGROUND LOG"},
-  {"cmd": "ls", "expect": "/etc/hostname"},
-  {"cmd": "mem", "expect": "Long Mode"},
-  {"cmd": "ping 10.0.2.2", "expect": "Reply from"},
-  {"cmd": "health", "expect": "Servidor LLM: OK", "needs_llm": true}
-]
-""")
-    print("[OK] tests/smoke.json actualizado con threads, ps y telemetry.")
-
-
-def update_dondeestamos():
-    doc = ROOT / "dondeestamos.txt"
-    safe_write(doc, r"""================================================================================
-ESTADO DEL PROYECTO MYOS (Octubre 2026)
-================================================================================
-
-MYOS: Autonomous AI-Native x86_64 Operating System
-Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
-
-================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (12 / 12)
-================================================================================
-
-#   Hito                                Estado  Impacto en el Sistema
---------------------------------------------------------------------------------
-1   Feedback Veraz de Herramientas      ✅      Telemetría física en vivo (CR0/CR3/CR4, heap kmalloc alineado a 16 bytes,
-                                                bus PCI, tabla ARP dinámica y lectura/escritura física de sectores LBA).
-
-2   Depuración e IDT 64-bit             ✅      32 excepciones x86_64 capturadas con volcado completo de registros (RIP,
-                                                RSP, RFLAGS, CR2 en Page Faults) y pila de ejecución protegida a 64 KiB.
-
-3   Puerta de Arranque (Boot Gate)      ✅      Submódulo modular 'boot_gate.c' con suite de auto-test de 5 fases (RAM,
-                                                disco, VFS, ICMP, LLM). Rollback automático del host en Docker ante kernels
-                                                rotos o con errores de sintaxis (The Singularity Loop v2).
-
-4   Blindaje de Archivos del Sistema    ✅      'ejecutar.py' protege físicamente boot.s, idt.*, boot_gate.*, virtio_blk.*,
-                                                srcfs.*, io.h, pmm.*, vmm.*, mem.*, thread.*, mutex.* y switch.s.
-
-5   Persistencia RamFS con Dirty-Track  ✅      Firma MYOSFS01 en virtio-blk. Inodos gestionados con bandera 'dirty': las
-                                                escrituras en disco se reducen un 90% (solo se escriben inodos modificados).
-
-6   Higiene y Despachador Unificado     ✅      Eliminación de código muerto en kernel.c; 'dispatch_command' como única fuente
-                                                de verdad para la consola interactiva y para las herramientas del Agente.
-
-7   Interrupciones Hardware y Reloj     ✅      PIC 8259 remapeado a 0x20..0x2F sin colisiones con excepciones de CPU.
-                                                PIT 8254 Canal 0 activo a 1000 Hz (1 tick = 1 ms). Interrupciones activadas
-                                                con 'sti'. Comandos 'uptime' y 'sleep <ms>' con reposo real de CPU ('hlt').
-
-8   Pila de Red WAN y Cliente Web       ✅      Resolución DNS dinámica (10.0.2.3:53), HTTP/1.1 con cabecera 'Host' dinámica.
-                                                Cliente 'curl <dominio|ip> [puerto] [ruta]' capaz de conectar con la Internet
-                                                pública real (probado con éxito en Cloudflare y NeverSSL con HTTP 200 OK).
-
-9   Teclado PS/2 y Terminal Dual VGA    ✅      IRQ1 habilitada (vector 33), controlador de teclado PS/2 (Set 1) con buffer
-                                                circular y soporte Shift/Caps. Emulador de terminal VGA en 0xB8000 con scroll
-                                                vertical y cursor de hardware. Entrada y salida sincronizadas entre COM1 y QEMU.
-
-10  Memoria Persistente y Singularidad  ✅      - Subsistema de memoria categorizada (/etc/mem_user.txt, /etc/mem_hw.txt,
-                                                  /etc/mem_kernel.txt) inyectado automáticamente en el prompt sin amnesia.
-                                                - Desbloqueo dinámico de 'is_valid_tool' para auto-evolución de comandos.
-                                                - Solución de sincronización de caché VirtioFS en macOS Docker (ejecutar.py).
-                                                - Singularidad probada: el Agente inspeccionó kernel.c con src_cat, programó
-                                                  el comando 'cls', superó la prueba canaria y lo ejecutó autónomamente.
-                                                - Invocación directa del agente mediante el comando conversacional 'myos <mision>'.
-
-11  Arquitectura de Memoria (PMM / VMM) ✅      - PMM: Bitmap Allocator de 4 KiB que parsea el mapa E820 de Multiboot
-                                                  blindando los primeros 16 MiB para el hardware y dispositivos VirtIO.
-                                                - VMM: Paginación de 4 niveles x86_64 con soporte de páginas de 4 KiB y
-                                                  desglose dinámico de Huge Pages de 2 MiB (Split) sin tocar periféricos.
-                                                - Aislamiento Hardware: EFER.NXE activo, CR0.WP activo en Ring 0,
-                                                  .text (RO + Executable), .rodata (RO + No-Execute), .data/.bss (RW + NX).
-                                                - KHEAP Dinámico: kmalloc/kfree desacoplado en 0x20000000 (512 MiB virtual),
-                                                  con expansión elástica bajo demanda backed por páginas VMM/PMM con bit NX.
-
-12  Multitarea y Demonios de Kernel     ✅      - Planificador Round-Robin cooperativo con cambio de contexto en ensamblador
-                                                  ('switch_context' en System V ABI con alineación estricta de 16 bytes).
-                                                - Pilas de hilos aisladas en 0x80000000 (2 GiB) con Guard Pages (Página 0 desmapeada).
-                                                - Demonio 'idle' (TID 1): reposo de bajo consumo en CPU con 'hlt'.
-                                                - Demonio 'netd' (TID 2): procesador de recepción de tramas VirtIO-NET en segundo plano.
-                                                - Demonio 'sysmon' (TID 3): recolector periódico de telemetría hacia /sys/telemetry.txt.
-                                                - Primitivas de sincronización 'kmutex_lock / unlock' aplicadas al VFS (RamFS thread-safe).
-                                                - Recolector de basura 'thread_reap_dead' que libera pilas y marcos PMM al morir un hilo.
-
-================================================================================
-SIGUIENTES HORIZONTES PARA MYOS (Plan de Futuro)
-================================================================================
-
-Fase 4: Misiones Complejas del Agente IA sobre Sistema Multitarea
-----------------------------------------------------------------
-- Explotar la concurrencia para que el Agente lance tareas de diagnóstico o descargas en segundo plano.
-- Permitir que el agente consulte información con 'curl', sintetice resúmenes en disco y supervise el estado del sistema.
-
-Fase 5 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
--------------------------------------------------------------------------------------
-- Reestructuración del árbol en 'src/arch/x86_64' y 'src/arch/aarch64'.
-- Capa de abstracción de memoria HAL: 'pmm_arch.c' y 'vmm_arch.c' aprovechando las interfaces consolidadas.
-- Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu'.
-- Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria, Kthreads).
-- Arranque bare-metal ARMv8-A (EL1, MMIO UART/GPIO, timer genérico cntvct_el0).
-================================================================================
-""")
-    print("[OK] dondeestamos.txt actualizado con el Hito 12.")
-
-
-def run_docker_build():
-    if not shutil.which("docker"):
-        return True
-
-    time.sleep(0.5)
-
-    cmd = [
-        "docker", "run", "--rm", "--platform", "linux/amd64",
-        "-v", f"{ROOT}:/myos", "-w", "/myos",
-        DOCKER_IMAGE, "make"
-    ]
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    out = (p.stdout or "") + (p.stderr or "")
-    if p.returncode == 0:
-        print("\n" + "=" * 60)
-        print("COMPILACION EXITOSA EN DOCKER: 0 ERRORES / 0 WARNINGS")
-        print("=" * 60)
-        return True
-    else:
-        print("\n" + "=" * 60)
-        print("ERROR DE COMPILACION:")
-        print("=" * 60)
-        print(out)
-        return False
-
-
-def main():
-    print("\n--- CONSOLIDANDO FASE 3 (KTHREADS & DEMONIOS) ---")
-    update_smoke_tests()
-    update_dondeestamos()
-    run_docker_build()
+    r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64",
+                        "-v", f"{ROOT}:/myos", "-w", "/myos", IMG, "make"],
+                       capture_output=True, text=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0:
+        print("COMPILACION FALLIDA:\n" + out)
+        return 1
+    warns = [l for l in out.splitlines() if "warning" in l.lower()]
+    print(f"COMPILACION OK ({len(warns)} warnings)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

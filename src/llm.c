@@ -218,7 +218,7 @@ static int extract_json_content(const char *json, char *out, uint32_t out_max)
     return len > 0 ? len : 0;
 }
 
-int llm_health(void)
+static int llm_health_unlocked(void)
 {
     struct http_response resp;
     int code = http_get(llm_ip, llm_port, "/health", http_resp_buf, sizeof(http_resp_buf), &resp, 5000);
@@ -248,7 +248,7 @@ int llm_json_get(const char *json, const char *key, char *out, uint32_t out_max)
     return extract_json_field(json, quoted_key, out, out_max);
 }
 
-int llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+static int llm_chat_json_unlocked(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
     if (build_chat_payload_mode(prompt, payload_buf, sizeof(payload_buf), 1) < 0) {
         kprint("LLM: payload too large\n");
@@ -273,7 +273,7 @@ int llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint3
 
     return extract_json_content(resp.body, reply_out, reply_max);
 }
-int llm_chat(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+static int llm_chat_unlocked(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
 {
     if (build_chat_payload(prompt, payload_buf, sizeof(payload_buf)) < 0) {
         kprint("LLM: payload too large\n");
@@ -388,4 +388,31 @@ int llm_diagnose(const char *user_question, char *reply_out, uint32_t reply_max,
     prompt_combined[pos] = '\0';
 
     return llm_chat(prompt_combined, reply_out, reply_max, timeout_ms);
+}
+
+
+/* Las respuestas viven en http_resp_buf/payload_buf (estaticos): el cerrojo
+ * cubre toda la llamada, incluida la extraccion del JSON. */
+int llm_health(void)
+{
+    net_lock();
+    int r = llm_health_unlocked();
+    net_unlock();
+    return r;
+}
+
+int llm_chat_json(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+{
+    net_lock();
+    int r = llm_chat_json_unlocked(prompt, reply_out, reply_max, timeout_ms);
+    net_unlock();
+    return r;
+}
+
+int llm_chat(const char *prompt, char *reply_out, uint32_t reply_max, uint32_t timeout_ms)
+{
+    net_lock();
+    int r = llm_chat_unlocked(prompt, reply_out, reply_max, timeout_ms);
+    net_unlock();
+    return r;
 }

@@ -13,6 +13,13 @@ int net_init(void);
 /* Procesa como maximo una trama pendiente. 1 si habia trama. */
 int net_poll(void);
 
+/* Paso de espera: recibe una trama y cede la CPU (salvo dentro de un handler RX). */
+void net_wait_step(void);
+
+/* Cerrojo global de red (recursivo): serializa http/dns/icmp/llm entre hilos. */
+void net_lock(void);
+void net_unlock(void);
+
 /* Resuelve ip -> MAC (cache + ARP request). 1 = OK, 0 = timeout. */
 int arp_resolve(const uint8_t *ip, uint8_t *mac_out, uint32_t timeout_ms);
 

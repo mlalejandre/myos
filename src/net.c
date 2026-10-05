@@ -6,6 +6,8 @@
 #include "net.h"
 #include "ip.h"
 #include "virtio_net.h"
+#include "thread.h"
+#include "mutex.h"
 
 
 #define ETH_HLEN        14
@@ -41,6 +43,8 @@ static struct arp_entry arp_cache[ARP_CACHE_SIZE];
 static uint8_t arp_next;
 
 static uint8_t rx_frame[2048];
+static volatile int net_rx_depth;   /* >0 dentro de un handler RX */
+static struct kmutex net_big_lock;  /* a cero == desbloqueado */
 
 
 static uint16_t rd16(const uint8_t *p)
@@ -316,10 +320,27 @@ int net_poll(void)
         return 0;
     }
 
+    net_rx_depth++;
     handle_frame(rx_frame, len);
+    net_rx_depth--;
 
     return 1;
 }
+
+
+void net_wait_step(void)
+{
+    net_poll();
+
+    /* Ceder dentro de un handler RX dejaria a otro hilo pisar rx_frame. */
+    if (net_rx_depth == 0) {
+        thread_yield();
+    }
+}
+
+
+void net_lock(void)   { kmutex_lock(&net_big_lock); }
+void net_unlock(void) { kmutex_unlock(&net_big_lock); }
 
 
 int arp_resolve(const uint8_t *ip, uint8_t *mac_out, uint32_t timeout_ms)
@@ -342,7 +363,7 @@ int arp_resolve(const uint8_t *ip, uint8_t *mac_out, uint32_t timeout_ms)
 
         while ((rdtsc() - start) < per_attempt) {
 
-            net_poll();
+            net_wait_step();
 
             if (arp_lookup(ip, mac_out)) {
                 return 1;

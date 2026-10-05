@@ -8,6 +8,7 @@ struct kmutex {
     volatile int  locked;
     struct tcb   *owner;
     const char   *name;
+    volatile int  depth;     /* profundidad de recursion del propietario */
 };
 
 /* Inicializa un mutex con nombre descriptivo */

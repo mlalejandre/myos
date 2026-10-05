@@ -6,6 +6,7 @@ void kmutex_init(struct kmutex *m, const char *name)
     if (!m) return;
     m->locked = 0;
     m->owner = 0;
+    m->depth = 0;
     m->name = name ? name : "mutex";
 }
 
@@ -18,10 +19,12 @@ void kmutex_lock(struct kmutex *m)
         if (!m->locked) {
             m->locked = 1;
             m->owner = curr;
+            m->depth = 1;
             return;
         }
         if (m->owner == curr) {
-            return; /* Adquisicion recursiva por el mismo hilo */
+            m->depth++;     /* Adquisicion recursiva por el mismo hilo */
+            return;
         }
         thread_yield();
     }
@@ -35,6 +38,11 @@ int kmutex_trylock(struct kmutex *m)
     if (!m->locked) {
         m->locked = 1;
         m->owner = curr;
+        m->depth = 1;
+        return 1;
+    }
+    if (m->owner == curr) {
+        m->depth++;
         return 1;
     }
     return 0;
@@ -43,6 +51,11 @@ int kmutex_trylock(struct kmutex *m)
 void kmutex_unlock(struct kmutex *m)
 {
     if (!m) return;
+    if (m->depth > 1) {
+        m->depth--;         /* unlock interno: seguimos siendo propietarios */
+        return;
+    }
+    m->depth = 0;
     m->locked = 0;
     m->owner = 0;
 }

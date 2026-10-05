@@ -5,6 +5,7 @@
 #include "io.h"
 #include "mem.h"
 #include "tcp.h"
+#include "net.h"
 
 extern uint64_t tsc_ticks_per_ms;
 #define TSC_PER_MS tsc_ticks_per_ms
@@ -95,7 +96,7 @@ static void http_parse_response(char *buf, uint32_t len, struct http_response *r
     }
 }
 
-int http_request_host(
+static int http_request_host_unlocked(
     const uint8_t *ip,
     uint16_t port,
     const char *host,
@@ -214,6 +215,28 @@ int http_request_host(
 
     http_parse_response(buf, total, resp);
     return resp->status_code;
+}
+
+static int http_request_host(
+    const uint8_t *ip,
+    uint16_t port,
+    const char *host,
+    const char *method,
+    const char *path,
+    const char *content_type,
+    const char *body,
+    uint32_t body_len,
+    char *buf,
+    uint32_t buf_size,
+    struct http_response *resp,
+    uint32_t timeout_ms
+)
+{
+    net_lock();
+    int r = http_request_host_unlocked(ip, port, host, method, path, content_type,
+                                       body, body_len, buf, buf_size, resp, timeout_ms);
+    net_unlock();
+    return r;
 }
 
 int http_request(

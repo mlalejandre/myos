@@ -45,9 +45,9 @@ thread_trampoline_asm:
      * Restamos 8 bytes para simular que entramos mediante 'call',
      * garantizando que dentro de la funcion C (%rsp + 8) % 16 == 0 (ABI System V).
      */
-    subq $8, %rsp
+    /* FIX: %rsp ya es multiplo de 16 aqui; 'call' empuja el retorno.
+       Restar 8 dejaba toda la pila del hilo desalineada (#GP con SSE). */
     call thread_trampoline_c
-    addq $8, %rsp
     call thread_exit
     hlt
 
