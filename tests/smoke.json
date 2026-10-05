@@ -1,7 +1,9 @@
 [
   {"cmd": "help", "expect": "Comandos disponibles"},
   {"cmd": "src_ls", "expect": "kernel.c"},
-  {"cmd": "heap", "expect": "Memoria Libre"},
+  {"cmd": "pmm", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "vmm", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "heap", "expect": "SUPERADO CON EXITO"},
   {"cmd": "ls", "expect": "/etc/hostname"},
   {"cmd": "mem", "expect": "Long Mode"},
   {"cmd": "ping 10.0.2.2", "expect": "Reply from"},

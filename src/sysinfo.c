@@ -225,7 +225,7 @@ int sysinfo_format_mem(char *out_buf, uint32_t max)
     append_dec(out_buf, max, &pos, (uint64_t)used);
     append_str(out_buf, max, &pos, " bytes usados, ");
     append_dec(out_buf, max, &pos, (uint64_t)(free_b / 1024));
-    append_str(out_buf, max, &pos, " KiB libres (total 12 MiB en 0x00400000)\n");
+    append_str(out_buf, max, &pos, " KiB libres (Heap dinamico VMM en 0x20000000)\n");
     append_str(out_buf, max, &pos, "- Virtqueue 0 (RX): 0x00200000 (2 MiB fija)");
 
     return (int)pos;

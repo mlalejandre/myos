@@ -19,6 +19,8 @@ OBJS = \
 	$(BUILD)/boot.o \
 	$(BUILD)/kernel.o \
 	$(BUILD)/mem.o \
+	$(BUILD)/pmm.o \
+	$(BUILD)/vmm.o \
 	$(BUILD)/console.o \
 	$(BUILD)/pci.o \
 	$(BUILD)/virtio_net.o \

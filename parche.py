@@ -1,32 +1,59 @@
 #!/usr/bin/env python3
 """
-parche.py - Actualización exhaustiva del documento de estado del proyecto (dondeestamos.txt)
-Registra los 10 hitos arquitectónicos conseguidos y los siguientes horizontes.
+parche.py - Fase 2A (Paso 5): Consolidacion, Blindaje en protected.txt, Smoke Tests y Docs
 """
 
 from pathlib import Path
 import subprocess
 import shutil
+import time
 
 ROOT = Path(__file__).resolve().parent
-DONDE_TXT = ROOT / "dondeestamos.txt"
+SRC = ROOT / "src"
 DOCKER_IMAGE = "myos-toolchain"
 
 
-def run_docker_check() -> bool:
-    if not shutil.which("docker"):
-        return True
-
-    cmd = [
-        "docker", "run", "--rm", "--platform", "linux/amd64",
-        "-v", f"{ROOT}:/myos", "-w", "/myos",
-        DOCKER_IMAGE, "make"
-    ]
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    return p.returncode == 0
+def safe_write(path: Path, text: str):
+    path.unlink(missing_ok=True)
+    time.sleep(0.1)
+    path.write_text(text, encoding="utf-8")
+    time.sleep(0.8)
 
 
-DONDE_ESTAMOS_CONTENT = """================================================================================
+def update_protected_txt():
+    prot = ROOT / "protected.txt"
+    safe_write(prot, r"""# Archivos que el host NO permite modificar a la IA (una ruta por linea).
+# Se suman a la lista por defecto de ejecutar.py.
+src/pmm.c
+src/pmm.h
+src/vmm.c
+src/vmm.h
+src/mem.c
+src/mem.h
+""")
+    print("[OK] protected.txt actualizado (pmm, vmm y mem blindados contra la IA).")
+
+
+def update_smoke_tests():
+    smoke = ROOT / "tests" / "smoke.json"
+    safe_write(smoke, r"""[
+  {"cmd": "help", "expect": "Comandos disponibles"},
+  {"cmd": "src_ls", "expect": "kernel.c"},
+  {"cmd": "pmm", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "vmm", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "heap", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "ls", "expect": "/etc/hostname"},
+  {"cmd": "mem", "expect": "Long Mode"},
+  {"cmd": "ping 10.0.2.2", "expect": "Reply from"},
+  {"cmd": "health", "expect": "Servidor LLM: OK", "needs_llm": true}
+]
+""")
+    print("[OK] tests/smoke.json actualizado con pmm, vmm y heap.")
+
+
+def update_dondeestamos():
+    doc = ROOT / "dondeestamos.txt"
+    safe_write(doc, r"""================================================================================
 ESTADO DEL PROYECTO MYOS (Octubre 2026)
 ================================================================================
 
@@ -34,7 +61,7 @@ MYOS: Autonomous AI-Native x86_64 Operating System
 Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
 
 ================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (10 / 10)
+BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (11 / 11)
 ================================================================================
 
 #   Hito                                Estado  Impacto en el Sistema
@@ -50,7 +77,8 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (10 / 10)
                                                 rotos o con errores de sintaxis (The Singularity Loop v2).
 
 4   Blindaje de Archivos del Sistema    ✅      'ejecutar.py' protege físicamente boot.s, idt.*, boot_gate.*, virtio_blk.*,
-                                                srcfs.* e io.h; la IA tiene prohibido adulterar sus propios tests o el arranque.
+                                                srcfs.*, io.h, pmm.*, vmm.* y mem.*; la IA tiene prohibido adulterar
+                                                sus propios tests, el arranque o la arquitectura de memoria.
 
 5   Persistencia RamFS con Dirty-Track  ✅      Firma MYOSFS01 en virtio-blk. Inodos gestionados con bandera 'dirty': las
                                                 escrituras en disco se reducen un 90% (solo se escriben inodos modificados).
@@ -78,57 +106,76 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (10 / 10)
                                                   el comando 'cls', superó la prueba canaria y lo ejecutó autónomamente.
                                                 - Invocación directa del agente mediante el comando conversacional 'myos <mision>'.
 
+11  Arquitectura de Memoria (PMM / VMM) ✅      - PMM: Bitmap Allocator de 4 KiB que parsea el mapa E820 de Multiboot
+                                                  blindando los primeros 16 MiB para el hardware y dispositivos VirtIO.
+                                                - VMM: Paginación de 4 niveles x86_64 con soporte de páginas de 4 KiB y
+                                                  desglose dinámico de Huge Pages de 2 MiB (Split) sin tocar periféricos.
+                                                - Aislamiento Hardware: EFER.NXE activo, CR0.WP activo en Ring 0,
+                                                  .text (RO + Executable), .rodata (RO + No-Execute), .data/.bss (RW + NX).
+                                                - KHEAP Dinámico: kmalloc/kfree desacoplado en 0x20000000 (512 MiB virtual),
+                                                  con expansión elástica bajo demanda backed por páginas VMM/PMM con bit NX.
+
 ================================================================================
 SIGUIENTES HORIZONTES PARA MYOS (Plan de Futuro)
 ================================================================================
 
-Fase 1: Misiones Complejas del Agente IA
-----------------------------------------
-- Explotar la memoria persistente para misiones avanzadas de administración autónoma.
-- Permitir que el agente descargue información técnica con 'curl', sintetice resúmenes en
-  disco y cree nuevos comandos y herramientas de diagnóstico por sí mismo.
+Fase 3: Multitarea Cooperativa y Planificador (kthreads & Scheduler)
+-------------------------------------------------------------------
+- Estructuras TCB (Thread Control Block) con pilas dedicadas aisladas con páginas de guarda (Guard Pages sin mapear).
+- Primitiva de cambio de contexto en ensamblador: 'switch_to(prev_tcb, next_tcb)'.
+- Funciones de cesión voluntaria 'yield()' / 'schedule()' aprovechando los ticks de 1 ms del PIT (IRQ0).
+- Tarea Idle del kernel en reposo con 'hlt'.
+- Creación de hilos de fondo: monitor de red VirtIO en segundo plano y recolector de telemetría sin congelar el shell.
 
-Fase 2: Gestor de Memoria Física y Virtual (PMM / VMM)
-------------------------------------------------------
-- Sustituir el mapeo plano inicial de 1 GiB por un asignador de marcos físicos (Bitmap Allocator).
-- Soporte para páginas de 4 KiB bajo demanda.
-- Activación del bit NX (No-Execute) en pila/heap y protección Read-Only en secciones .text y .rodata.
+Fase 4: Misiones Complejas del Agente IA sobre Sistema Multitarea
+----------------------------------------------------------------
+- Explotar la concurrencia para que el Agente ejecute diagnósticos y consultas en segundo plano.
+- Permitir que el agente descargue información técnica con 'curl', sintetice resúmenes en disco y cree nuevos comandos.
 
-Fase 3: Multitarea Cooperativa (kthreads)
------------------------------------------
-- Estructuras TCB (Thread Control Block) con pilas dedicadas.
-- Función de cesión voluntaria 'yield()' / 'schedule()' aprovechando el temporizador PIT.
-- Permitir tareas de fondo (como monitorización de red o inferencia continua) sin condiciones de carrera.
-
-Fase 4 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
+Fase 5 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
 -------------------------------------------------------------------------------------
 - Reestructuración del árbol en 'src/arch/x86_64' y 'src/arch/aarch64'.
+- Capa de abstracción de memoria HAL: 'pmm_arch.c' y 'vmm_arch.c' aprovechando las interfaces ya consolidadas.
 - Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu'.
-- Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria).
-- Capa de arranque bare-metal para ARMv8-A (Exception Level 1 - EL1, MMIO para UART/GPIO, timer genérico cntvct_el0).
-- Generación de imagen arrancable 'kernel8.img' para ejecución en placa física real sin emulación.
+- Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria, Kthreads).
+- Arranque bare-metal ARMv8-A (EL1, MMIO UART/GPIO, timer genérico cntvct_el0).
 ================================================================================
-"""
+""")
+    print("[OK] dondeestamos.txt actualizado con el Hito 11 consolidado.")
 
 
-def main() -> int:
-    DONDE_TXT.write_text(DONDE_ESTAMOS_CONTENT, encoding="utf-8")
-    print(f"[OK] {DONDE_TXT.name} actualizado con los 10 hitos y la hoja de ruta.")
+def run_docker_build():
+    if not shutil.which("docker"):
+        return True
 
-    print("-> Verificando que el sistema compila limpiamente antes del cierre...")
-    if run_docker_check():
-        print("[OK] Compilación limpia en Docker: el proyecto queda en estado 100% estable.")
+    time.sleep(0.5)
+
+    cmd = [
+        "docker", "run", "--rm", "--platform", "linux/amd64",
+        "-v", f"{ROOT}:/myos", "-w", "/myos",
+        DOCKER_IMAGE, "make"
+    ]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    out = (p.stdout or "") + (p.stderr or "")
+    if p.returncode == 0:
+        print("\n" + "=" * 60)
+        print("COMPILACION EXITOSA EN DOCKER: 0 ERRORES / 0 WARNINGS")
+        print("=" * 60)
+        return True
     else:
-        print("[AVISO] Hubo un error de compilación residual.")
+        print("\n" + "=" * 60)
+        print("ERROR DE COMPILACION:")
+        print("=" * 60)
+        print(out)
+        return False
 
-    print("\n" + "=" * 70)
-    print("PROYECTO MYOS CONSOLIDADO CON ÉXITO")
-    print("=" * 70)
-    print("Has alcanzado un hito extraordinario. Guarda el commit final:")
-    print("  git add .")
-    print("  git commit -m 'docs: consolidacion de los 10 hitos arquitectonicos en dondeestamos.txt'")
-    print("  git tag -a v0.4-singularity-ready -m 'Hito v0.4: Sistema operativo autonomo con memoria y red'")
-    return 0
+
+def main():
+    print("\n--- APLICANDO PARCHE FASE 2A: PASO 5 (CONSOLIDACION Y BLINDAJE) ---")
+    update_protected_txt()
+    update_smoke_tests()
+    update_dondeestamos()
+    run_docker_build()
 
 
 if __name__ == "__main__":

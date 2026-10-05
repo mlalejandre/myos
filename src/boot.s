@@ -13,6 +13,10 @@
 _start:
     cli
 
+    /* Preservar informacion de arranque entregada por GRUB/Multiboot */
+    movl %eax, multiboot_magic
+    movl %ebx, multiboot_info_addr
+
     movl $stack_top, %esp
 
     call setup_long_mode
@@ -84,7 +88,7 @@ map_pd:
 
     movl $0xC0000080, %ecx
     rdmsr
-    orl $0x100, %eax
+    orl $0x900, %eax    /* Bit 8 (LME) + Bit 11 (NXE: No-Execute Enable) */
     wrmsr
 
     /* CR0: limpiar EM (bit 2), fijar MP (bit 1), PG (bit 31), PE (bit 0) */
@@ -247,6 +251,15 @@ isr_stub_table:
 
 .section .text
 
+
+.section .data
+.align 8
+.global multiboot_magic
+.global multiboot_info_addr
+multiboot_magic:
+    .long 0
+multiboot_info_addr:
+    .long 0
 
 .section .bss
 

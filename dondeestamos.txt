@@ -6,7 +6,7 @@ MYOS: Autonomous AI-Native x86_64 Operating System
 Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
 
 ================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (10 / 10)
+BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (11 / 11)
 ================================================================================
 
 #   Hito                                Estado  Impacto en el Sistema
@@ -22,7 +22,8 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (10 / 10)
                                                 rotos o con errores de sintaxis (The Singularity Loop v2).
 
 4   Blindaje de Archivos del Sistema    ✅      'ejecutar.py' protege físicamente boot.s, idt.*, boot_gate.*, virtio_blk.*,
-                                                srcfs.* e io.h; la IA tiene prohibido adulterar sus propios tests o el arranque.
+                                                srcfs.*, io.h, pmm.*, vmm.* y mem.*; la IA tiene prohibido adulterar
+                                                sus propios tests, el arranque o la arquitectura de memoria.
 
 5   Persistencia RamFS con Dirty-Track  ✅      Firma MYOSFS01 en virtio-blk. Inodos gestionados con bandera 'dirty': las
                                                 escrituras en disco se reducen un 90% (solo se escriben inodos modificados).
@@ -50,33 +51,37 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (10 / 10)
                                                   el comando 'cls', superó la prueba canaria y lo ejecutó autónomamente.
                                                 - Invocación directa del agente mediante el comando conversacional 'myos <mision>'.
 
+11  Arquitectura de Memoria (PMM / VMM) ✅      - PMM: Bitmap Allocator de 4 KiB que parsea el mapa E820 de Multiboot
+                                                  blindando los primeros 16 MiB para el hardware y dispositivos VirtIO.
+                                                - VMM: Paginación de 4 niveles x86_64 con soporte de páginas de 4 KiB y
+                                                  desglose dinámico de Huge Pages de 2 MiB (Split) sin tocar periféricos.
+                                                - Aislamiento Hardware: EFER.NXE activo, CR0.WP activo en Ring 0,
+                                                  .text (RO + Executable), .rodata (RO + No-Execute), .data/.bss (RW + NX).
+                                                - KHEAP Dinámico: kmalloc/kfree desacoplado en 0x20000000 (512 MiB virtual),
+                                                  con expansión elástica bajo demanda backed por páginas VMM/PMM con bit NX.
+
 ================================================================================
 SIGUIENTES HORIZONTES PARA MYOS (Plan de Futuro)
 ================================================================================
 
-Fase 1: Misiones Complejas del Agente IA
-----------------------------------------
-- Explotar la memoria persistente para misiones avanzadas de administración autónoma.
-- Permitir que el agente descargue información técnica con 'curl', sintetice resúmenes en
-  disco y cree nuevos comandos y herramientas de diagnóstico por sí mismo.
+Fase 3: Multitarea Cooperativa y Planificador (kthreads & Scheduler)
+-------------------------------------------------------------------
+- Estructuras TCB (Thread Control Block) con pilas dedicadas aisladas con páginas de guarda (Guard Pages sin mapear).
+- Primitiva de cambio de contexto en ensamblador: 'switch_to(prev_tcb, next_tcb)'.
+- Funciones de cesión voluntaria 'yield()' / 'schedule()' aprovechando los ticks de 1 ms del PIT (IRQ0).
+- Tarea Idle del kernel en reposo con 'hlt'.
+- Creación de hilos de fondo: monitor de red VirtIO en segundo plano y recolector de telemetría sin congelar el shell.
 
-Fase 2: Gestor de Memoria Física y Virtual (PMM / VMM)
-------------------------------------------------------
-- Sustituir el mapeo plano inicial de 1 GiB por un asignador de marcos físicos (Bitmap Allocator).
-- Soporte para páginas de 4 KiB bajo demanda.
-- Activación del bit NX (No-Execute) en pila/heap y protección Read-Only en secciones .text y .rodata.
+Fase 4: Misiones Complejas del Agente IA sobre Sistema Multitarea
+----------------------------------------------------------------
+- Explotar la concurrencia para que el Agente ejecute diagnósticos y consultas en segundo plano.
+- Permitir que el agente descargue información técnica con 'curl', sintetice resúmenes en disco y cree nuevos comandos.
 
-Fase 3: Multitarea Cooperativa (kthreads)
------------------------------------------
-- Estructuras TCB (Thread Control Block) con pilas dedicadas.
-- Función de cesión voluntaria 'yield()' / 'schedule()' aprovechando el temporizador PIT.
-- Permitir tareas de fondo (como monitorización de red o inferencia continua) sin condiciones de carrera.
-
-Fase 4 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
+Fase 5 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
 -------------------------------------------------------------------------------------
 - Reestructuración del árbol en 'src/arch/x86_64' y 'src/arch/aarch64'.
+- Capa de abstracción de memoria HAL: 'pmm_arch.c' y 'vmm_arch.c' aprovechando las interfaces ya consolidadas.
 - Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu'.
-- Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria).
-- Capa de arranque bare-metal para ARMv8-A (Exception Level 1 - EL1, MMIO para UART/GPIO, timer genérico cntvct_el0).
-- Generación de imagen arrancable 'kernel8.img' para ejecución en placa física real sin emulación.
+- Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria, Kthreads).
+- Arranque bare-metal ARMv8-A (EL1, MMIO UART/GPIO, timer genérico cntvct_el0).
 ================================================================================

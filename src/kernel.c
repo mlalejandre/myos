@@ -11,11 +11,16 @@
 #include "console.h"
 #include "sysinfo.h"
 #include "mem.h"
+#include "pmm.h"
+#include "vmm.h"
 #include "fs.h"
 #include "io.h"
 #include "srcfs.h"
 #include "idt.h"
 #include "boot_gate.h"
+
+extern uint32_t multiboot_magic;
+extern uint32_t multiboot_info_addr;
 
 static volatile uint16_t *const VGA =
     (uint16_t *)0xB8000;
@@ -409,6 +414,20 @@ static uint32_t max_fb_dummy = 2048;
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
+    if (cmd_line[0] == 'v' && cmd_line[1] == 'm' && cmd_line[2] == 'm' && (cmd_line[3] == '\0' || cmd_line[3] == ' ')) {
+        vmm_test_self();
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "VMM: Paginacion 4 KiB verificada.");
+        return 1;
+    }
+
+    if (cmd_line[0] == 'p' && cmd_line[1] == 'm' && cmd_line[2] == 'm' && (cmd_line[3] == '\0' || cmd_line[3] == ' ')) {
+        pmm_dump_stats();
+        pmm_test_self();
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "PMM: Bitmap allocator verificado.");
+        return 1;
+    }
     if (cmd_line[0] == 'c' && cmd_line[1] == 'l' && cmd_line[2] == 's') {
         console_clear();
         uint32_t p = 0;
@@ -640,14 +659,8 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
         kprint("\n"); kprint(out_buf); kprint("\n");
         return 1;
     } else if (cmd_line[0] == 'h' && cmd_line[1] == 'e' && cmd_line[2] == 'a' && cmd_line[3] == 'p') {
-        size_t used = 0, free_b = 0;
-        kheap_stats(&used, &free_b);
-        kprint("\nESTADO DEL HEAP (kmalloc):\n-------------------------\n");
-        kprint("Base del Heap:    0x00400000 (4 MiB)\n");
-        kprint("Alineacion:       16 bytes estricta\n");
-        kprint("Memoria Usada:    "); kprint_dec((uint32_t)used); kprint(" bytes\n");
-        kprint("Memoria Libre:    "); kprint_dec((uint32_t)(free_b / 1024)); kprint(" KiB\n");
-        kprint("Capacidad total:  12 MiB\n\n");
+        kheap_dump_stats();
+        kheap_test_self();
         sysinfo_format_mem(out_buf, max_out);
         return 1;
     } else if (cmd_line[0] == 'p' && cmd_line[1] == 'i' && cmd_line[2] == 'n' && cmd_line[3] == 'g') {
@@ -1117,6 +1130,8 @@ static void shell_run(void)
             serial_print("  fs-sync              - Fuerza sincronizacion de RamFS a virtio-blk\n");
             serial_print("  fs-format            - Restaura RamFS al estado inicial de fabrica\n");
             serial_print("  rm <archivo>         - Elimina un archivo\n");
+            serial_print("  pmm                  - Estado y auto-test del gestor de frames fisicos (PMM)\n");
+            serial_print("  vmm                  - Auto-test del gestor de memoria virtual (VMM 4 KiB)\n");
             serial_print("  mem                  - Informacion de CPU, paginacion y memoria\n");
             serial_print("  stats                - Estadisticas de trafico VirtIO-NET\n");
             serial_print("  arp                  - Muestra la tabla de cache ARP\n");
@@ -1407,6 +1422,10 @@ void kernel_main(void)
 {
     serial_init();
     idt_init();
+    pmm_init(multiboot_magic, multiboot_info_addr);
+    vmm_init();
+    vmm_apply_protections();
+    kheap_init();
     timer_calibrate_tsc();
     timer_init(1000); /* PIT IRQ0 a 1000 Hz (1 ms tick) */
     kprint("PIT: IRQ0 activo a 1000 Hz (ticks de 1 ms)\n");
@@ -1430,7 +1449,7 @@ void kernel_main(void)
     vga_print_at("VirtIO-NET: OK  |  TCP/IP: OK  |  HTTP: OK", 9, 20);
     vga_print_at("LLM Server: 192.168.1.200:8087 (nail-35b)", 11, 20);
 
-    if (llm_test_passed) {
+        if (llm_test_passed) {
         vga_print_at("LLM Response: ", 14, 20);
         vga_print_at(llm_last_reply, 14, 34);
         vga_print_at(">> SYSTEM STATUS: AUTONOMOUS AI LINK ESTABLISHED <<", 17, 15);
