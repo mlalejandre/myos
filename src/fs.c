@@ -1,3 +1,4 @@
+#include "mutex.h"
 #include <stdint.h>
 
 #include "console.h"
@@ -26,6 +27,7 @@ struct fs_disk_entry {
 };
 
 static struct vfs_file files[FS_MAX_FILES];
+static struct kmutex vfs_mutex;
 static int fs_initialized = 0;
 
 static int str_eq(const char *a, const char *b)
@@ -244,6 +246,7 @@ void vfs_init(void)
     }
 
     fs_initialized = 1;
+    kmutex_init(&vfs_mutex, "vfs_lock");
 
     struct fs_superblock sb;
     if (virtio_blk_read(FS_SUPER_LBA, &sb) == 0 &&
@@ -291,6 +294,7 @@ int vfs_create(const char *name, const char *initial_data)
 int vfs_write(const char *name, const char *data, uint32_t len)
 {
     if (!fs_initialized) vfs_init();
+    kmutex_lock(&vfs_mutex);
 
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         if (files[i].used && str_eq(files[i].name, name)) {
@@ -302,13 +306,16 @@ int vfs_write(const char *name, const char *data, uint32_t len)
             files[i].size = len;
             files[i].dirty = 1;
             if (vfs_sync() != 0) {
+                kmutex_unlock(&vfs_mutex);
                 return -1;
             }
+            kmutex_unlock(&vfs_mutex);
             return (int)len;
         }
     }
 
     int r = vfs_create(name, data);
+    kmutex_unlock(&vfs_mutex);
     return r == 0 ? (int)len : -1;
 }
 

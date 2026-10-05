@@ -13,6 +13,8 @@
 #include "mem.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "thread.h"
+#include "mutex.h"
 #include "fs.h"
 #include "io.h"
 #include "srcfs.h"
@@ -414,6 +416,21 @@ static uint32_t max_fb_dummy = 2048;
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
+    if (cmd_line[0] == 'p' && cmd_line[1] == 's' && (cmd_line[2] == '\0' || cmd_line[2] == ' ')) {
+        thread_dump();
+        kmutex_test_self();
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "PS: Procesos e hilos verificados.");
+        return 1;
+    }
+    if (cmd_line[0] == 't' && cmd_line[1] == 'h' && cmd_line[2] == 'r' && cmd_line[3] == 'e' && cmd_line[4] == 'a' && cmd_line[5] == 'd' && cmd_line[6] == 's') {
+        thread_dump();
+        thread_test_self();
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "KTHREADS: Planificador cooperativo verificado.");
+        return 1;
+    }
+
     if (cmd_line[0] == 'v' && cmd_line[1] == 'm' && cmd_line[2] == 'm' && (cmd_line[3] == '\0' || cmd_line[3] == ' ')) {
         vmm_test_self();
         uint32_t p = 0;
@@ -1114,6 +1131,8 @@ static void shell_run(void)
             serial_print("  help                 - Muestra esta ayuda\n");
             serial_print("  creador              - Muestra informacion del creador de MYOS\n");
             serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
+            serial_print("  threads              - Estado de los hilos de kernel (Kthreads) y auto-test\n");
+            serial_print("  ps                   - Lista de procesos y demonios activos con ticks CPU\n");
             serial_print("  uptime               - Tiempo de ejecucion del kernel\n");
             serial_print("  sleep <ms>           - Suspende la CPU con HLT durante N milisegundos\n");
             serial_print("  dns <dominio>        - Consulta de registro A en servidor DNS\n");
@@ -1426,6 +1445,7 @@ void kernel_main(void)
     vmm_init();
     vmm_apply_protections();
     kheap_init();
+    thread_init();
     timer_calibrate_tsc();
     timer_init(1000); /* PIT IRQ0 a 1000 Hz (1 ms tick) */
     kprint("PIT: IRQ0 activo a 1000 Hz (ticks de 1 ms)\n");

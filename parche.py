@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-parche.py - Fase 2A (Paso 5): Consolidacion, Blindaje en protected.txt, Smoke Tests y Docs
+parche.py - Fase 3 (Cierre): Consolidacion de Hito 12 en dondeestamos.txt y smoke tests
 """
 
 from pathlib import Path
@@ -20,20 +20,6 @@ def safe_write(path: Path, text: str):
     time.sleep(0.8)
 
 
-def update_protected_txt():
-    prot = ROOT / "protected.txt"
-    safe_write(prot, r"""# Archivos que el host NO permite modificar a la IA (una ruta por linea).
-# Se suman a la lista por defecto de ejecutar.py.
-src/pmm.c
-src/pmm.h
-src/vmm.c
-src/vmm.h
-src/mem.c
-src/mem.h
-""")
-    print("[OK] protected.txt actualizado (pmm, vmm y mem blindados contra la IA).")
-
-
 def update_smoke_tests():
     smoke = ROOT / "tests" / "smoke.json"
     safe_write(smoke, r"""[
@@ -42,13 +28,16 @@ def update_smoke_tests():
   {"cmd": "pmm", "expect": "SUPERADO CON EXITO"},
   {"cmd": "vmm", "expect": "SUPERADO CON EXITO"},
   {"cmd": "heap", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "threads", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "ps", "expect": "SUPERADO CON EXITO"},
+  {"cmd": "cat /sys/telemetry.txt", "expect": "MYOS TELEMETRY BACKGROUND LOG"},
   {"cmd": "ls", "expect": "/etc/hostname"},
   {"cmd": "mem", "expect": "Long Mode"},
   {"cmd": "ping 10.0.2.2", "expect": "Reply from"},
   {"cmd": "health", "expect": "Servidor LLM: OK", "needs_llm": true}
 ]
 """)
-    print("[OK] tests/smoke.json actualizado con pmm, vmm y heap.")
+    print("[OK] tests/smoke.json actualizado con threads, ps y telemetry.")
 
 
 def update_dondeestamos():
@@ -61,7 +50,7 @@ MYOS: Autonomous AI-Native x86_64 Operating System
 Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
 
 ================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (11 / 11)
+BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (12 / 12)
 ================================================================================
 
 #   Hito                                Estado  Impacto en el Sistema
@@ -77,8 +66,7 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (11 / 11)
                                                 rotos o con errores de sintaxis (The Singularity Loop v2).
 
 4   Blindaje de Archivos del Sistema    ✅      'ejecutar.py' protege físicamente boot.s, idt.*, boot_gate.*, virtio_blk.*,
-                                                srcfs.*, io.h, pmm.*, vmm.* y mem.*; la IA tiene prohibido adulterar
-                                                sus propios tests, el arranque o la arquitectura de memoria.
+                                                srcfs.*, io.h, pmm.*, vmm.*, mem.*, thread.*, mutex.* y switch.s.
 
 5   Persistencia RamFS con Dirty-Track  ✅      Firma MYOSFS01 en virtio-blk. Inodos gestionados con bandera 'dirty': las
                                                 escrituras en disco se reducen un 90% (solo se escriben inodos modificados).
@@ -115,33 +103,34 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (11 / 11)
                                                 - KHEAP Dinámico: kmalloc/kfree desacoplado en 0x20000000 (512 MiB virtual),
                                                   con expansión elástica bajo demanda backed por páginas VMM/PMM con bit NX.
 
+12  Multitarea y Demonios de Kernel     ✅      - Planificador Round-Robin cooperativo con cambio de contexto en ensamblador
+                                                  ('switch_context' en System V ABI con alineación estricta de 16 bytes).
+                                                - Pilas de hilos aisladas en 0x80000000 (2 GiB) con Guard Pages (Página 0 desmapeada).
+                                                - Demonio 'idle' (TID 1): reposo de bajo consumo en CPU con 'hlt'.
+                                                - Demonio 'netd' (TID 2): procesador de recepción de tramas VirtIO-NET en segundo plano.
+                                                - Demonio 'sysmon' (TID 3): recolector periódico de telemetría hacia /sys/telemetry.txt.
+                                                - Primitivas de sincronización 'kmutex_lock / unlock' aplicadas al VFS (RamFS thread-safe).
+                                                - Recolector de basura 'thread_reap_dead' que libera pilas y marcos PMM al morir un hilo.
+
 ================================================================================
 SIGUIENTES HORIZONTES PARA MYOS (Plan de Futuro)
 ================================================================================
 
-Fase 3: Multitarea Cooperativa y Planificador (kthreads & Scheduler)
--------------------------------------------------------------------
-- Estructuras TCB (Thread Control Block) con pilas dedicadas aisladas con páginas de guarda (Guard Pages sin mapear).
-- Primitiva de cambio de contexto en ensamblador: 'switch_to(prev_tcb, next_tcb)'.
-- Funciones de cesión voluntaria 'yield()' / 'schedule()' aprovechando los ticks de 1 ms del PIT (IRQ0).
-- Tarea Idle del kernel en reposo con 'hlt'.
-- Creación de hilos de fondo: monitor de red VirtIO en segundo plano y recolector de telemetría sin congelar el shell.
-
 Fase 4: Misiones Complejas del Agente IA sobre Sistema Multitarea
 ----------------------------------------------------------------
-- Explotar la concurrencia para que el Agente ejecute diagnósticos y consultas en segundo plano.
-- Permitir que el agente descargue información técnica con 'curl', sintetice resúmenes en disco y cree nuevos comandos.
+- Explotar la concurrencia para que el Agente lance tareas de diagnóstico o descargas en segundo plano.
+- Permitir que el agente consulte información con 'curl', sintetice resúmenes en disco y supervise el estado del sistema.
 
 Fase 5 (Hito Estratégico): Portabilidad Multi-Arquitectura (Raspberry Pi 4 - AArch64)
 -------------------------------------------------------------------------------------
 - Reestructuración del árbol en 'src/arch/x86_64' y 'src/arch/aarch64'.
-- Capa de abstracción de memoria HAL: 'pmm_arch.c' y 'vmm_arch.c' aprovechando las interfaces ya consolidadas.
+- Capa de abstracción de memoria HAL: 'pmm_arch.c' y 'vmm_arch.c' aprovechando las interfaces consolidadas.
 - Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu'.
 - Aprovechamiento íntegro del 80% del código universal en C (TCP/IP, HTTP, RamFS, LLM ReAct, Memoria, Kthreads).
 - Arranque bare-metal ARMv8-A (EL1, MMIO UART/GPIO, timer genérico cntvct_el0).
 ================================================================================
 """)
-    print("[OK] dondeestamos.txt actualizado con el Hito 11 consolidado.")
+    print("[OK] dondeestamos.txt actualizado con el Hito 12.")
 
 
 def run_docker_build():
@@ -171,8 +160,7 @@ def run_docker_build():
 
 
 def main():
-    print("\n--- APLICANDO PARCHE FASE 2A: PASO 5 (CONSOLIDACION Y BLINDAJE) ---")
-    update_protected_txt()
+    print("\n--- CONSOLIDANDO FASE 3 (KTHREADS & DEMONIOS) ---")
     update_smoke_tests()
     update_dondeestamos()
     run_docker_build()

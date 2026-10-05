@@ -17,6 +17,9 @@ CFLAGS = \
 
 OBJS = \
 	$(BUILD)/boot.o \
+	$(BUILD)/switch.o \
+	$(BUILD)/thread.o \
+	$(BUILD)/mutex.o \
 	$(BUILD)/kernel.o \
 	$(BUILD)/mem.o \
 	$(BUILD)/pmm.o \
@@ -46,6 +49,9 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/boot.o: src/boot.s | $(BUILD)
+	$(CC) -m64 -c $< -o $@
+
+$(BUILD)/switch.o: src/switch.s | $(BUILD)
 	$(CC) -m64 -c $< -o $@
 
 $(BUILD)/%.o: src/%.c $(HEADERS) | $(BUILD)

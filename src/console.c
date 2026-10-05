@@ -1,3 +1,4 @@
+#include "thread.h"
 #include "console.h"
 #include "io.h"
 
@@ -216,6 +217,7 @@ int kgetc_ready(void)
 char kgetc(void)
 {
     while (!kgetc_ready()) {
+        thread_yield();
         cpu_pause();
     }
     if (kbd_head != kbd_tail) {

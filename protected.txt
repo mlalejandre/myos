@@ -6,3 +6,8 @@ src/vmm.c
 src/vmm.h
 src/mem.c
 src/mem.h
+src/thread.c
+src/thread.h
+src/switch.s
+src/mutex.c
+src/mutex.h
