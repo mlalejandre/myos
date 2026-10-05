@@ -30,3 +30,9 @@ estructura_proyecto.txt
 # Parches de la IA
 build_backup_src/
 .parche_backup/
+
+# Snapshots y checkpoints de disco (16 MiB cada uno)
+snapshots/
+hdd.img.checkpoint*
+*.checkpoint_*
+.parches_backup/

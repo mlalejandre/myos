@@ -1,6 +1,10 @@
 #include "mutex.h"
 #include "console.h"
 
+#define MAX_REGISTERED_MUTEXES 32
+static struct kmutex *mutex_registry[MAX_REGISTERED_MUTEXES];
+static int mutex_registry_count = 0;
+
 void kmutex_init(struct kmutex *m, const char *name)
 {
     if (!m) return;
@@ -8,6 +12,14 @@ void kmutex_init(struct kmutex *m, const char *name)
     m->owner = 0;
     m->depth = 0;
     m->name = name ? name : "mutex";
+
+    /* Auto-registrar mutex en la tabla global si no existe */
+    for (int i = 0; i < mutex_registry_count; ++i) {
+        if (mutex_registry[i] == m) return;
+    }
+    if (mutex_registry_count < MAX_REGISTERED_MUTEXES) {
+        mutex_registry[mutex_registry_count++] = m;
+    }
 }
 
 void kmutex_lock(struct kmutex *m)
@@ -60,6 +72,25 @@ void kmutex_unlock(struct kmutex *m)
     m->owner = 0;
 }
 
+void kmutex_release_all_for_thread(struct tcb *t)
+{
+    if (!t) return;
+    for (int i = 0; i < mutex_registry_count; ++i) {
+        struct kmutex *m = mutex_registry[i];
+        if (m && m->locked && m->owner == t) {
+            kprint("\n[MUTEX RECOVERY] Mutex '");
+            kprint(m->name);
+            kprint("' liberado forzosamente tras muerte de TID ");
+            kprint_dec(t->tid);
+            kprint("\n");
+
+            m->depth = 0;
+            m->locked = 0;
+            m->owner = 0;
+        }
+    }
+}
+
 /* Auto-test de sincronizacion */
 static struct kmutex test_mtx;
 static volatile int shared_counter = 0;
@@ -107,6 +138,29 @@ int kmutex_test_self(void)
     }
 
     kprint("  Seccion critica protegida OK (100 incrementos concurrentes sin conflicto)\n");
-    kprint("[KMUTEX AUTO-TEST] SUPERADO CON EXITO.\n\n");
+
+    /* Prueba 2: Recuperacion forzada de mutex huerfano tras thread_kill */
+    kprint("  Probando recuperacion de mutex huerfano tras kill...\n");
+    kmutex_lock(&test_mtx);
+
+    /* Simular que el dueño era un hilo efimero con TID ficticio 99 */
+    struct tcb fake_dead_thread;
+    fake_dead_thread.tid = 99;
+    test_mtx.owner = &fake_dead_thread;
+
+    /* Invocar recuperacion forzada */
+    kmutex_release_all_for_thread(&fake_dead_thread);
+
+    if (test_mtx.locked != 0 || test_mtx.owner != 0) {
+        kprint("  FALLO: Mutex no fue limpiado tras muerte del hilo\n");
+        return 0;
+    }
+
+    /* Debe poder re-adquirirse limpiamente sin deadlock */
+    kmutex_lock(&test_mtx);
+    kmutex_unlock(&test_mtx);
+    kprint("  Recuperacion de bloqueo huerfano verificada OK (sin deadlocks)\n");
+
+    kprint("[KMUTEX AUTO-TEST] SUPERADO CON EXITO (Concurrencia y Kill Seguro OK).\n\n");
     return 1;
 }

@@ -11,3 +11,4 @@ src/thread.h
 src/switch.s
 src/mutex.c
 src/mutex.h
+src/arch.h

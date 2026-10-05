@@ -1,7 +1,5 @@
 #ifndef MYOS_CONSOLE_H
 #define MYOS_CONSOLE_H
-/* hpatch ok */
-/* hpatch ok */
 
 #include <stdint.h>
 
@@ -20,6 +18,7 @@ int  kgetc_ready(void);
 char kgetc(void);
 int  kgetline(char *buf, uint32_t max);
 void console_clear(void);
+extern volatile int console_muted;
 void keyboard_irq_handler(void);
 
 

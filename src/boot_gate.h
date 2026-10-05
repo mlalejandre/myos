@@ -3,10 +3,10 @@
 
 #include <stdint.h>
 
-/* Ejecuta la suite de pruebas bare-metal (0 = OK, -1 = fallo critico) */
+/* Ejecuta la suite integral de 9 fases del sistema (0 = OK, -1 = fallo critico) */
 int boot_gate_run_test_suite(char *out_buf, uint32_t max_out);
 
-/* Verificacion del modo canary en el arranque */
+/* Verificacion ultrarrapida en modo canary (<1s, local, determinista) */
 void boot_gate_check(void);
 
 #endif

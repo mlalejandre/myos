@@ -24,5 +24,11 @@ void vfs_list(void);
 int  vfs_format_list(char *out_buf, uint32_t max);
 int  vfs_sync(void);
 void vfs_format(void);
+void vfs_tree(char *out_buf, uint32_t max);
+void vfs_get_stats(uint32_t *files_used, uint32_t *bytes_used, uint32_t *dirty_count);
+
+/* Checkpoints bare-metal en virtio-blk (LBA 4096) */
+int  vfs_checkpoint_save(void);
+int  vfs_checkpoint_restore(void);
 
 #endif

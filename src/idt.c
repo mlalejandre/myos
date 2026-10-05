@@ -178,6 +178,7 @@ void isr_exception_handler(struct trap_frame *tf)
         irq_dispatch(tf);
         return;
     }
+    console_muted = 0; /* un panic dentro de una redireccion '>' debe ser visible */
     uint64_t cr2 = read_cr2();
     uint64_t cr0 = read_cr0();
     uint64_t cr3 = read_cr3();

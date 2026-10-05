@@ -134,21 +134,28 @@ Una vez iniciado el sistema en la terminal, dispones de una consola interactiva:
 
 | Comando | Descripción |
 | :--- | :--- |
-| `help` | Muestra la lista de comandos disponibles |
-| `status` | Muestra la dirección IP, Gateway y MAC asignadas |
-| `mem` | Inspección en vivo de registros `CR0`, `CR3`, `CR4` y puntero de pila `RSP` |
-| `heap` | Muestra la memoria usada y libre del asignador `kmalloc` |
-| `stats` | Estadísticas reales de paquetes y bytes TX/RX de VirtIO-NET |
-| `arp` | Muestra la tabla de resolución y caché ARP |
-| `pci` | Re-escanea el bus PCI y enumera los dispositivos detectados |
-| `ping <ip>` | Envía un datagrama ICMP echo a una dirección IPv4 |
-| `ls` | Lista los archivos presentes en el RamFS |
-| `cat <archivo>` | Imprime el contenido de un archivo en texto plano |
-| `write <archivo> <texto>` | Crea o sobrescribe un archivo en el RamFS |
-| `rm <archivo>` | Elimina un archivo del sistema de archivos en memoria |
-| `llm <mensaje>` | Envía una consulta directa al LLM local |
-| `llm-diag` | Recopila la telemetría del kernel y solicita un diagnóstico técnico a la IA |
-| `agent <mision>` | Ejecuta el agente autónomo con capacidad de llamada a herramientas |
+| `help` | Muestra el catálogo completo de comandos del sistema |
+| `test_suite` | Suite integral de no regresión (9 fases completas del kernel) |
+| `ps` / `threads` | Supervisión de KThreads, estado de CPU y prueba de exclusión mutua |
+| `spawn <cmd>` / `bg` | Lanza un comando o tarea en segundo plano con volcado a `/tmp/job_<TID>.log` |
+| `kill <tid>` | Termina un hilo en segundo plano liberando sus mutexes y marcos PMM |
+| `free` / `df` | Telemetría en vivo de RAM física, KHeap y capacidad del RamFS |
+| `date` / `time <cmd>` | Reloj RTC CMOS en tiempo real y benchmarks en ms y ciclos TSC |
+| `tree` | Muestra la estructura jerárquica de archivos y directorios del RamFS |
+| `nano <archivo>` | Editor de texto en pantalla completa (80x25) con guardado (^S) y salida (^X) |
+| `grep <patron> <arch>` | Búsqueda rápida de cadenas en archivos con número de línea |
+| `head` / `tail` / `wc` | Visualización de inicio/fin de archivo y conteo de líneas, palabras y bytes |
+| `cp` / `mv` / `touch` | Copiado, movimiento/renombrado y creación de archivos vacíos |
+| `echo <txt> [> arch]` | Impresión de texto o redirección directa a archivo |
+| `<cmd> > <archivo>` | Redirección universal de E/S silenciando pantalla hacia RamFS |
+| `hexdump` / `xxd` | Volcado canónico en formato hexadecimal y ASCII |
+| `reboot` / `poweroff` | Reinicio físico mediante el controlador 8042 o apagado ACPI |
+| `status` / `mem` | Inspección de IP/MAC y registros de control `CR0`, `CR3`, `CR4` y `RSP` |
+| `heap` / `pmm` / `vmm` | Auto-tests y telemetría de memoria dinámica, marcos físicos y paginación |
+| `ping <ip>` / `dns` | Ping ICMP a IPv4 y resolución de nombres mediante servidor DNS |
+| `curl <host> [pt] [r]` | Cliente HTTP/1.1 con resolución DNS dinámica y cabeceras dinámicas |
+| `src_ls` / `src_cat` | Inspección del código fuente del kernel empaquetado en disco (`SRCFS`) |
+| `myos <mision>` | Invocación del Agente IA ReAct con memoria episódica persistente |
 
 ---
 
@@ -181,16 +188,18 @@ Misión completada. El ping a 10.0.2.2 se ejecutó y el resultado fue persistido
 
 ## 🗺️ Hoja de Ruta
 
-- [x] Arranque x86_64 Long Mode & Paginación
-- [x] Enumeración PCI y Driver VirtIO-NET
-- [x] Pila de Red Completa (Ethernet, ARP, IPv4, ICMP, TCP, UDP, DNS)
-- [x] Cliente HTTP y Parser JSON
-- [x] Asignador de Memoria Dinámica (`kmalloc` / `kfree`)
-- [x] Sistema de Archivos en Memoria (RamFS)
-- [x] Agente Autónomo ReAct con memoria episódica
-- [ ] Driver de Disco Persistente (`virtio-blk`)
-- [ ] Carga completa de fuentes del kernel en disco
-- [ ] Pipeline de compilación y recarga autónoma (*Self-Modification Loop*)
+- [x] Arranque x86_64 Long Mode & Paginación 4 KiB con protecciones hardware (NX / CR0.WP)
+- [x] Enumeración PCI y Drivers VirtIO (`virtio-net` y `virtio-blk` persistente)
+- [x] Pila de Red Completa desde Cero (Ethernet, ARP, IPv4, ICMP, TCP, UDP, DNS)
+- [x] Cliente HTTP/1.1 y Parser JSON Bare-Metal
+- [x] Asignador de Memoria Dinámica KHeap alineado a 16 bytes con expansión respaldada por VMM/PMM
+- [x] Sistema de Archivos RamFS Persistente con Dirty-Track (MYOSFS01 en disco)
+- [x] Multitarea Cooperativa: Planificador Round-Robin, KThreads, Demonios y Control de Trabajos (`spawn`, `kill`)
+- [x] Suite de Coreutils Unix/DOS, Motor Readline Bare-Metal y Editor Nano en pantalla completa
+- [x] Agente Autónomo ReAct con memoria contextual acumulativa y enlace LAN (`llama-server`)
+- [x] Carga de fuentes del kernel en disco (`SRCFS`) y bucle de modificación autónoma (*The Singularity Loop v2*)
+- [x] Consolidación Arquitectónica: Rollback atómico, recuperación de mutexes huérfanos y Sandboxing en Ring 0
+- [ ] Portabilidad Multi-Arquitectura ARM64 (Raspberry Pi 4)
 
 ---
 

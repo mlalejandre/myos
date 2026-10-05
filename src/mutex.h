@@ -23,7 +23,10 @@ int kmutex_trylock(struct kmutex *m);
 /* Libera el mutex */
 void kmutex_unlock(struct kmutex *m);
 
-/* Auto-test de exclusion mutua concurrente con dos hilos */
+/* Libera forzosamente todos los mutexes que pertenecian a un hilo que ha muerto o sido terminado */
+void kmutex_release_all_for_thread(struct tcb *t);
+
+/* Auto-test de exclusion mutua concurrente con dos hilos y recuperacion tras kill */
 int kmutex_test_self(void);
 
 #endif

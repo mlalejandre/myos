@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# MYOS DEVELOPMENT RUNNER - THE SINGULARITY LOOP (v2)
+# SOMA DEVELOPMENT RUNNER - THE SINGULARITY LOOP (v2)
 #
 # Protocolo del buzon (LBA 1..16, 8 KiB):
 #   [0..7]  "PATCHv02"
@@ -90,7 +90,7 @@ def git_snapshot(message: str) -> None:
 def build(uid: str, gid: str) -> tuple[int, str]:
     cmd = ["docker", "run", "--rm", "--platform", "linux/amd64",
            "-u", f"{uid}:{gid}", "-v", f"{ROOT}:/myos", DOCKER_IMAGE, "make"]
-    print(f"\n{'=' * 72}\nCOMPILANDO MYOS\n{'=' * 72}\n\n$ {' '.join(cmd)}\n")
+    print(f"\n{'=' * 72}\nCOMPILANDO SOMA BARE-METAL\n{'=' * 72}\n\n$ {' '.join(cmd)}\n")
     p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     out = (p.stdout or "") + (p.stderr or "")
     print(out)
@@ -155,6 +155,13 @@ def disarm_boot_gate() -> None:
         f.seek(BOOT_GATE_LBA * SECTOR)
         f.write(b"\x00" * SECTOR)
 
+RESUME_FLAG_LBA = 25
+
+def arm_agent_resume() -> None:
+    with open(HDD, "rb+") as f:
+        f.seek(RESUME_FLAG_LBA * SECTOR)
+        f.write(b"RESUME_REQ\x00" + b"\x00" * (SECTOR - 11))
+
 
 PROTECTED_FILES = {
     'boot.s', 'idt.c', 'idt.h', 'io.h', 'srcfs.c', 'srcfs.h',
@@ -212,6 +219,25 @@ def compute_patch(text: str):
                 return None, (f"SEARCH aparece {n} veces (debe ser 1) en {name}: "
                               f"{search[:60]!r}")
             contents[target][1] = cur.replace(search, repl, 1)
+
+    if len(sections) > 2:
+        return None, f"Radio de mutacion excedido: maximo 2 archivos por parche (propuestos: {len(sections)})"
+
+    for p, (o, n) in contents.items():
+        rel_name = p.relative_to(ROOT)
+        body = next((b for name, b in sections if safe_target(name) == p), "")
+        blocks = BLOCK_RE.findall(body)
+        if len(blocks) > 3:
+            return None, f"Radio de mutacion excedido en {rel_name}: maximo 3 bloques por archivo (propuestos: {len(blocks)})"
+        for search, repl in blocks:
+            if not search.strip():
+                return None, f"Bloque SEARCH vacio no permitido en {rel_name}"
+            s_lines = len(search.splitlines())
+            r_lines = len(repl.splitlines())
+            if s_lines > 120:
+                return None, f"Bloque SEARCH demasiado grande en {rel_name} ({s_lines} lineas > max 120)"
+            if r_lines > 150:
+                return None, f"Bloque REPLACE demasiado grande en {rel_name} ({r_lines} lineas > max 150)"
 
     changes = {p: (o, n) for p, (o, n) in contents.items() if o != n}
     if not changes:
@@ -275,7 +301,12 @@ def handle_mailbox(approve: bool) -> bool | None:
             write_result("REJECTED", "rechazado por el humano")
             return False
 
-    git_snapshot("MYOS: snapshot antes de parche de la IA")
+    git_snapshot("SOMA: snapshot antes de parche de la IA")
+    auto_snap = ROOT / "snapshots" / f"auto_pre_patch_{int(time.time())}"
+    auto_snap.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(SRC_DIR, auto_snap / "src", dirs_exist_ok=True)
+    if HDD.exists(): shutil.copy2(HDD, auto_snap / "hdd.img")
+    print(f"[REPRODUCIBILIDAD] Snapshot automatico guardado en snapshots/{auto_snap.name}/")
     apply_changes(changes)
     names = ", ".join(str(p.relative_to(ROOT)) for p in changes)
     print(f"\n[OK] Parche aplicado a: {names}")
@@ -332,15 +363,56 @@ def pack_sources() -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="MYOS runner (Singularity Loop v2)")
+    ap = argparse.ArgumentParser(description="SOMA runner (Singularity Loop v2)")
     ap.add_argument("--aprobar", action="store_true",
                     help="mostrar el diff y pedir confirmacion antes de aplicar")
     ap.add_argument("--max-ciclos", type=int, default=10,
                     help="maximo de ciclos compilar/arrancar (por defecto 10)")
+    ap.add_argument("--snapshot", type=str, metavar="NAME",
+                    help="guarda un snapshot completo reproducible (src + hdd.img)")
+    ap.add_argument("--restore", type=str, metavar="NAME",
+                    help="restaura un snapshot completo (src + hdd.img)")
+    ap.add_argument("--snapshots", action="store_true",
+                    help="lista todos los snapshots guardados")
     llm_server.add_arguments(ap)
     args = ap.parse_args()
 
-    print("\n" + "=" * 72 + "\nMYOS DEVELOPMENT RUNNER - THE SINGULARITY LOOP v2\n" + "=" * 72 + "\n")
+    SNAPSHOT_DIR = ROOT / "snapshots"
+
+    if args.snapshots:
+        if not SNAPSHOT_DIR.exists() or not list(SNAPSHOT_DIR.iterdir()):
+            print("No hay snapshots guardados en snapshots/.")
+        else:
+            print("\nSnapshots disponibles en snapshots/:")
+            for s in sorted(SNAPSHOT_DIR.iterdir()):
+                if s.is_dir():
+                    has_hdd = (s / "hdd.img").exists()
+                    has_src = (s / "src").exists()
+                    print(f"  - {s.name} (src: {'OK' if has_src else 'NO'}, hdd: {'OK' if has_hdd else 'NO'})")
+            print()
+        return 0
+
+    if args.snapshot:
+        s_target = SNAPSHOT_DIR / args.snapshot
+        s_target.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(SRC_DIR, s_target / "src", dirs_exist_ok=True)
+        if HDD.exists():
+            shutil.copy2(HDD, s_target / "hdd.img")
+        print(f"\n[OK] Snapshot '{args.snapshot}' guardado con exito en {s_target.relative_to(ROOT)}/\n")
+        return 0
+
+    if args.restore:
+        s_target = SNAPSHOT_DIR / args.restore
+        if not s_target.exists():
+            print(f"\n[ERROR] El snapshot '{args.restore}' no existe en snapshots/.\n")
+            return 1
+        shutil.copytree(s_target / "src", SRC_DIR, dirs_exist_ok=True)
+        if (s_target / "hdd.img").exists():
+            shutil.copy2(s_target / "hdd.img", HDD)
+        print(f"\n[OK] Snapshot '{args.restore}' restaurado con exito (src y hdd.img sincronizados).\n")
+        return 0
+
+    print("\n" + "=" * 72 + "\nSOMA DEVELOPMENT RUNNER - THE SINGULARITY LOOP v2\n" + "=" * 72 + "\n")
     if not shutil.which("docker") or not shutil.which(QEMU):
         print("ERROR: Faltan dependencias (Docker o QEMU).")
         return 1
@@ -379,6 +451,7 @@ def main() -> int:
                 print("\n[ROLLBACK] El parche de la IA no compila. Restaurando src/ ...")
                 restore_src()
                 write_result("COMPILE_FAILED (rollback aplicado)", errs)
+                arm_agent_resume()
                 patched = False
                 continue
             print("ERROR de compilacion. Rompiendo bucle.")
@@ -393,7 +466,7 @@ def main() -> int:
 
             canary_cmd = [
                 QEMU, "-machine", "pc", "-m", "256M", "-no-reboot",
-                "-cdrom", "build/myos.iso", "-netdev", "user,id=net0",
+                "-cdrom", "build/soma.iso", "-netdev", "user,id=net0",
                 "-device", "virtio-net-pci,netdev=net0",
                 "-drive", "file=hdd.img,format=raw,if=virtio",
                 "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
@@ -411,28 +484,30 @@ def main() -> int:
             if canary_rc == QEMU_EXIT_GATE_OK:
                 print("\n[BOOT-GATE OK] El nuevo kernel paso el health-check. Parche validado.")
                 write_result("BOOT_OK", "kernel nuevo verificado y operativo")
-                git_snapshot("MYOS: parche verificado por puerta de arranque")
+                git_snapshot("SOMA: parche verificado por puerta de arranque")
+                arm_agent_resume()
                 patched = False
             else:
                 print(f"\n[BOOT-GATE FAIL] El kernel fallo en el arranque (rc={canary_rc}).")
                 print("[ROLLBACK] Restaurando src/ a la version sana anterior...")
                 restore_src()
                 write_result("BOOT_FAILED (rollback aplicado)", f"canary_rc={canary_rc}")
+                arm_agent_resume()
                 patched = False
                 continue
 
         pack_sources()
 
         qemu_command = [
-            QEMU, "-machine", "pc", "-m", "256M", "-no-reboot", "-d", "int", "-D", "build/qemu.log",
-            "-cdrom", "build/myos.iso", "-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0",
+            QEMU, "-machine", "pc", "-m", "256M", "-no-reboot", "-d", "guest_errors,cpu_reset", "-D", "build/qemu.log",
+            "-cdrom", "build/soma.iso", "-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0",
             "-drive", "file=hdd.img,format=raw,if=virtio",
             "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
             "-object", "filter-dump,id=f1,netdev=net0,file=build/net.pcap",
             "-serial", "stdio",
         ]
 
-        print("\n" + "=" * 72 + "\nARRANCANDO MYOS BARE-METAL\n" + "=" * 72 + "\n")
+        print("\n" + "=" * 72 + "\nARRANCANDO SOMA BARE-METAL\n" + "=" * 72 + "\n")
         try:
             rc = subprocess.run(qemu_command, cwd=ROOT).returncode
         except KeyboardInterrupt:

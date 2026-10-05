@@ -339,7 +339,16 @@ void net_wait_step(void)
 }
 
 
-void net_lock(void)   { kmutex_lock(&net_big_lock); }
+static int net_lock_ready;
+
+void net_lock(void)
+{
+    if (!net_lock_ready) {
+        kmutex_init(&net_big_lock, "net_lock");
+        net_lock_ready = 1;
+    }
+    kmutex_lock(&net_big_lock);
+}
 void net_unlock(void) { kmutex_unlock(&net_big_lock); }
 
 

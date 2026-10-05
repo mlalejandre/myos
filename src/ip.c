@@ -21,7 +21,7 @@
 #define ICMP_ECHO_REQUEST 8
 #define ICMP_HLEN         8
 
-#define PING_ID           0x4D59
+#define PING_ID           0x534F
 #define PING_DATA_LEN     32
 
 /* Aproximacion bajo QEMU/TCG: ~1 tick de TSC por ns. */

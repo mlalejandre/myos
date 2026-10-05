@@ -125,6 +125,12 @@ static int kheap_expand(size_t min_bytes)
                          (uint64_t)frame,
                          VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_NX) != 0) {
             pmm_free_frame(frame);
+            for (size_t j = 0; j < i; ++j) {
+                uint64_t va = new_pages_start + j * VMM_PAGE_SIZE;
+                uint64_t pa = vmm_virt_to_phys(va);
+                vmm_unmap_page(va);
+                if (pa) pmm_free_frame(pa);
+            }
             return 0;
         }
     }

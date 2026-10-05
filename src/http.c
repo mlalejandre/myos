@@ -148,7 +148,7 @@ static int http_request_host_unlocked(
         buf_append_num(req_buf, sizeof(req_buf), &pos, port);
     }
 
-    buf_append(req_buf, sizeof(req_buf), &pos, "\r\nUser-Agent: MYOS/0.1\r\nAccept: */*\r\n");
+    buf_append(req_buf, sizeof(req_buf), &pos, "\r\nUser-Agent: SOMA/0.2\r\nAccept: */*\r\n");
 
     if (content_type) {
         buf_append(req_buf, sizeof(req_buf), &pos, "Content-Type: ");

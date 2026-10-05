@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# llm_server.py - Gestion del servidor llama.cpp remoto para MYOS.
+# llm_server.py - Gestion del servidor llama.cpp remoto para SOMA.
 #
 # Antes de arrancar QEMU:
 #   1) Comprueba /health. Si esta activo, lo usa (y ofrece cambiar de modelo).
@@ -39,8 +39,8 @@ DEFAULT_MODEL_PATH = os.getenv(
 DEFAULT_ALIAS = os.getenv("REMOTE_MODEL_ALIAS", "nail-35b")
 
 # PID/log propios de MYOS para no pisar los del otro proyecto.
-REMOTE_PID_FILE = os.getenv("MYOS_PID_FILE", "/tmp/myos-llama.pid")
-REMOTE_LOG_FILE = os.getenv("MYOS_LOG_FILE", "/tmp/myos-llama.log")
+REMOTE_PID_FILE = os.getenv("SOMA_PID_FILE", "/tmp/soma-llama.pid")
+REMOTE_LOG_FILE = os.getenv("SOMA_LOG_FILE", "/tmp/soma-llama.log")
 
 CTX = int(os.getenv("REMOTE_CTX", "32768"))
 THREADS = int(os.getenv("REMOTE_THREADS", "8"))
@@ -334,15 +334,15 @@ def ensure_server(args) -> None:
 
     # Hay que lanzar (o relanzar) el servidor: hace falta SSH.
     if shutil.which("ssh") is None:
-        warn("no hay cliente ssh; MYOS arrancara sin LLM.")
+        warn("no hay cliente ssh; SOMA arrancara sin LLM.")
         return
     try:
         r = run_ssh("exit", timeout=8)
     except Exception as e:
-        warn(f"SSH no responde ({e}); MYOS arrancara sin LLM.")
+        warn(f"SSH no responde ({e}); SOMA arrancara sin LLM.")
         return
     if r.returncode != 0:
-        warn(f"SSH con {SERVER_USER}@{SERVER_IP} fallo: {r.stderr.strip()}. MYOS arrancara sin LLM.")
+        warn(f"SSH con {SERVER_USER}@{SERVER_IP} fallo: {r.stderr.strip()}. SOMA arrancara sin LLM.")
         return
 
     models = list_models()
@@ -352,9 +352,9 @@ def ensure_server(args) -> None:
 
     choice = choose_model(models)
     if choice is None:
-        info("Sin LLM: MYOS arrancara sin servidor.")
+        info("Sin LLM: SOMA arrancara sin servidor.")
         return
 
     if launch(choice.path, alias_for(choice.path)):
         if not wait_ready():
-            warn("el servidor no llego a estar listo; MYOS arrancara y el test LLM fallara.")
+            warn("el servidor no llego a estar listo; SOMA arrancara y el test LLM fallara.")

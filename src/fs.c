@@ -39,6 +39,22 @@ static int str_eq(const char *a, const char *b)
     return (*a == *b);
 }
 
+static const char *fs_strstr(const char *haystack, const char *needle)
+{
+    if (!haystack || !needle) return 0;
+    if (!*needle) return haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && (*h == *n)) {
+            h++;
+            n++;
+        }
+        if (!*n) return haystack;
+    }
+    return 0;
+}
+
 static uint32_t str_len(const char *s)
 {
     uint32_t len = 0;
@@ -147,7 +163,7 @@ static int vfs_sync_unlocked(void)
 {
     struct fs_superblock sb;
     memset(&sb, 0, sizeof(sb));
-    memcpy(sb.magic, "MYOSFS01", 8);
+    memcpy(sb.magic, "SOMAFS01", 8);
     sb.version = 1;
     sb.max_files = FS_MAX_FILES;
 
@@ -218,20 +234,37 @@ static int vfs_create_internal(const char *name, const char *initial_data)
 
 static void vfs_format_unlocked(void)
 {
+    /* 1. Borrado fisico a bajo nivel de todos los sectores del RamFS en el disco */
+    static uint8_t zero_buf[512] __attribute__((aligned(16)));
+    memset(zero_buf, 0, sizeof(zero_buf));
+    
+    uint32_t fs_total_sectors = 1 + FS_MAX_FILES * 9;
+    for (uint32_t s = 0; s < fs_total_sectors; ++s) {
+        virtio_blk_write(1024 + s, zero_buf);
+    }
+    virtio_blk_write(4095, zero_buf); /* Limpiar checkpoint */
+
+    /* 2. Limpiar memoria RAM */
     for (int i = 0; i < FS_MAX_FILES; ++i) {
         files[i].used = 0;
         files[i].size = 0;
         files[i].dirty = 0;
         files[i].name[0] = '\0';
+        memset(files[i].data, 0, 4096);
     }
 
-    vfs_create_internal("/etc/hostname", "myos-node1\n");
-    vfs_create_internal("/etc/os-release", "NAME=MYOS\nVERSION=0.1-experimental\nARCH=x86_64\nSTORAGE=virtio-blk-persistent\n");
-    vfs_create_internal("/notes.txt", "MYOS Objetivo: Proporcionar a una IA un entorno propio y persistente en bare-metal.\n");
-    vfs_create_internal("/sys/status.txt", "KERNEL: x86_64 | VIRTIO: OK | NETWORK: 10.0.2.15 | STORAGE: PERSISTENT (MYOSFS01)\n");
-    vfs_create_internal("/src/kernel.c", "/* MYOS Kernel Entry */\nvoid kernel_main(void) {\n  serial_init();\n  virtio_blk_init();\n  vfs_init();\n  shell_run();\n}\n");
+    /* 3. Recrear estado de fabrica puro SOMA */
+    vfs_create_internal("/etc/hostname", "soma-node1\n");
+    vfs_create_internal("/etc/os-release", "NAME=SOMA\nVERSION=0.2-release\nARCH=x86_64\nSTORAGE=virtio-blk-persistent\nDESCRIPTION=Sistema Operativo Multi-Agente\n");
+    vfs_create_internal("/sys/status.txt", "KERNEL: SOMA x86_64 | VIRTIO: OK | NETWORK: 10.0.2.15 | STORAGE: PERSISTENT\n");
+    vfs_create_internal("/etc/soma_manifest.txt", "Identity: SOMA AI Kernel (Nail-35b)\nRole: Multi-Agent System Core Intelligence\nStatus: Fully Operational\n");
+    vfs_create_internal("/src/kernel.c", "/* SOMA Kernel Entry */\nvoid kernel_main(void) {\n  virtio_blk_init();\n  vfs_init();\n  shell_run();\n}\n");
 
-    vfs_sync();
+    /* 4. Forzar guardado al disco recien limpiado */
+    for (int i = 0; i < FS_MAX_FILES; ++i) {
+        if (files[i].used) files[i].dirty = 1;
+    }
+    vfs_sync_unlocked();
 }
 
 void vfs_init(void)
@@ -250,7 +283,7 @@ void vfs_init(void)
 
     struct fs_superblock sb;
     if (virtio_blk_read(FS_SUPER_LBA, &sb) == 0 &&
-        memcmp(sb.magic, "MYOSFS01", 8) == 0 &&
+        (memcmp(sb.magic, "SOMAFS01", 8) == 0 || memcmp(sb.magic, "MYOSFS01", 8) == 0) &&
         sb.version == 1 &&
         sb.max_files == FS_MAX_FILES &&
         sb.num_files <= FS_MAX_FILES) {
@@ -271,6 +304,18 @@ void vfs_init(void)
         kprint("VFS: ");
         kprint_dec((uint32_t)loaded);
         kprint(" archivos cargados desde virtio-blk.\n");
+
+        /* Migracion automatica de identidad a SOMA 0.2 */
+        char check_os[128];
+        if (vfs_read("/etc/os-release", check_os, sizeof(check_os)) > 0) {
+            if (fs_strstr(check_os, "NAME=MYOS")) {
+                vfs_write("/etc/os-release", "NAME=SOMA\nVERSION=0.2-release\nARCH=x86_64\nSTORAGE=virtio-blk-persistent\nDESCRIPTION=Sistema Operativo Multi-Agente\n", 112);
+                vfs_write("/etc/hostname", "soma-node1\n", 11);
+                vfs_write("/notes.txt", "SOMA: Sistema Operativo Multi-Agente con IA nativa y control directo sobre hardware.\n", 85);
+                vfs_write("/sys/status.txt", "KERNEL: SOMA x86_64 | VIRTIO: OK | NETWORK: 10.0.2.15 | STORAGE: PERSISTENT\n", 76);
+                kprint("VFS: Inodos de sistema migrados con exito a SOMA 0.2.\n");
+            }
+        }
         if ((uint32_t)loaded != sb.num_files || invalid != 0) {
             kprint("VFS: AVISO: inconsistencias detectadas; archivos invalidos omitidos.\n");
         }
@@ -305,7 +350,7 @@ int vfs_write(const char *name, const char *data, uint32_t len)
             files[i].data[len] = '\0';
             files[i].size = len;
             files[i].dirty = 1;
-            if (vfs_sync() != 0) {
+            if (vfs_sync_unlocked() != 0) {
                 kmutex_unlock(&vfs_mutex);
                 return -1;
             }
@@ -314,7 +359,7 @@ int vfs_write(const char *name, const char *data, uint32_t len)
         }
     }
 
-    int r = vfs_create(name, data);
+    int r = vfs_create_unlocked(name, data);
     kmutex_unlock(&vfs_mutex);
     return r == 0 ? (int)len : -1;
 }
@@ -410,6 +455,114 @@ static int vfs_format_list_unlocked(char *out_buf, uint32_t max)
 }
 
 
+static void vfs_get_stats_unlocked(uint32_t *files_used, uint32_t *bytes_used, uint32_t *dirty_count)
+{
+    uint32_t f = 0, b = 0, d = 0;
+    for (int i = 0; i < FS_MAX_FILES; ++i) {
+        if (files[i].used) {
+            f++;
+            b += files[i].size;
+            if (files[i].dirty) d++;
+        }
+    }
+    if (files_used) *files_used = f;
+    if (bytes_used) *bytes_used = b;
+    if (dirty_count) *dirty_count = d;
+}
+
+static void vfs_tree_unlocked(char *out_buf, uint32_t max)
+{
+    if (!fs_initialized) vfs_init();
+    uint32_t pos = 0;
+    const char *hdr = "/ (RamFS persistente MYOSFS01)\n";
+    kprint(hdr);
+    while (*hdr && pos < max - 1) out_buf[pos++] = *hdr++;
+
+    char dirs[16][32];
+    int dir_count = 0;
+    uint32_t total_bytes = 0;
+    int total_files = 0;
+
+    for (int i = 0; i < FS_MAX_FILES; ++i) {
+        if (!files[i].used) continue;
+        total_files++;
+        total_bytes += files[i].size;
+        const char *fn = files[i].name;
+        if (fn[0] == '/') fn++;
+        int slash = -1;
+        for (int j = 0; fn[j]; ++j) {
+            if (fn[j] == '/') { slash = j; break; }
+        }
+        if (slash > 0) {
+            char dname[32];
+            int k = 0;
+            for (; k < slash && k < 31; ++k) dname[k] = fn[k];
+            dname[k] = '\0';
+            int exists = 0;
+            for (int d = 0; d < dir_count; ++d) {
+                if (str_eq(dirs[d], dname)) { exists = 1; break; }
+            }
+            if (!exists && dir_count < 16) {
+                str_copy(dirs[dir_count++], dname, 32);
+            }
+        }
+    }
+
+    for (int d = 0; d < dir_count; ++d) {
+        kprint("+-- "); kprint(dirs[d]); kprint("/\n");
+        const char *p1 = "+-- "; while (*p1 && pos < max - 1) out_buf[pos++] = *p1++;
+        const char *p2 = dirs[d]; while (*p2 && pos < max - 1) out_buf[pos++] = *p2++;
+        if (pos < max - 2) { out_buf[pos++] = '/'; out_buf[pos++] = '\n'; }
+        uint32_t dlen = str_len(dirs[d]);
+        for (int i = 0; i < FS_MAX_FILES; ++i) {
+            if (!files[i].used) continue;
+            const char *fn = files[i].name;
+            if (fn[0] == '/') fn++;
+            int match = 1;
+            for (uint32_t k = 0; k < dlen; ++k) {
+                if (fn[k] != dirs[d][k]) { match = 0; break; }
+            }
+            if (match && fn[dlen] == '/') {
+                kprint("|   +-- "); kprint(fn + dlen + 1); kprint("\n");
+                const char *p3 = "|   +-- "; while (*p3 && pos < max - 1) out_buf[pos++] = *p3++;
+                const char *p4 = fn + dlen + 1; while (*p4 && pos < max - 1) out_buf[pos++] = *p4++;
+                if (pos < max - 1) out_buf[pos++] = '\n';
+            }
+        }
+    }
+
+    for (int i = 0; i < FS_MAX_FILES; ++i) {
+        if (!files[i].used) continue;
+        const char *fn = files[i].name;
+        if (fn[0] == '/') fn++;
+        int has_sub = 0;
+        for (int j = 0; fn[j]; ++j) {
+            if (fn[j] == '/') { has_sub = 1; break; }
+        }
+        if (!has_sub) {
+            kprint("+-- "); kprint(fn); kprint("\n");
+            const char *p5 = "+-- "; while (*p5 && pos < max - 1) out_buf[pos++] = *p5++;
+            const char *p6 = fn; while (*p6 && pos < max - 1) out_buf[pos++] = *p6++;
+            if (pos < max - 1) out_buf[pos++] = '\n';
+        }
+    }
+    out_buf[pos] = '\0';
+}
+
+void vfs_get_stats(uint32_t *files_used, uint32_t *bytes_used, uint32_t *dirty_count)
+{
+    kmutex_lock(&vfs_mutex);
+    vfs_get_stats_unlocked(files_used, bytes_used, dirty_count);
+    kmutex_unlock(&vfs_mutex);
+}
+
+void vfs_tree(char *out_buf, uint32_t max)
+{
+    kmutex_lock(&vfs_mutex);
+    vfs_tree_unlocked(out_buf, max);
+    kmutex_unlock(&vfs_mutex);
+}
+
 /* ---- Envoltorios con cerrojo (mutex recursivo) ---- */
 int vfs_sync(void)
 {
@@ -463,4 +616,62 @@ int vfs_format_list(char *out_buf, uint32_t max)
     int r = vfs_format_list_unlocked(out_buf, max);
     kmutex_unlock(&vfs_mutex);
     return r;
+}
+
+#define FS_CHECKPOINT_LBA  4096
+#define FS_TOTAL_SECTORS   (1 + FS_MAX_FILES * FS_SECTORS_PER_FILE)
+
+int vfs_checkpoint_save(void)
+{
+    if (!fs_initialized) vfs_init();
+    kmutex_lock(&vfs_mutex);
+    vfs_sync_unlocked();
+
+    static uint8_t c_buf[512] __attribute__((aligned(16)));
+    memset(c_buf, 0, sizeof(c_buf));
+    memcpy(c_buf, "MYOS_CHECKPOINT_V1", 18);
+    if (virtio_blk_write(FS_CHECKPOINT_LBA - 1, c_buf) != 0) {
+        kmutex_unlock(&vfs_mutex);
+        return -1;
+    }
+
+    for (uint32_t s = 0; s < FS_TOTAL_SECTORS; ++s) {
+        if (virtio_blk_read(FS_SUPER_LBA + s, c_buf) != 0 ||
+            virtio_blk_write(FS_CHECKPOINT_LBA + s, c_buf) != 0) {
+            kmutex_unlock(&vfs_mutex);
+            return -1;
+        }
+    }
+
+    kmutex_unlock(&vfs_mutex);
+    return 0;
+}
+
+int vfs_checkpoint_restore(void)
+{
+    if (!fs_initialized) vfs_init();
+    kmutex_lock(&vfs_mutex);
+
+    static uint8_t c_buf[512] __attribute__((aligned(16)));
+    if (virtio_blk_read(FS_CHECKPOINT_LBA - 1, c_buf) != 0 ||
+        memcmp(c_buf, "MYOS_CHECKPOINT_V1", 18) != 0) {
+        kmutex_unlock(&vfs_mutex);
+        return -1;
+    }
+
+    for (uint32_t s = 0; s < FS_TOTAL_SECTORS; ++s) {
+        if (virtio_blk_read(FS_CHECKPOINT_LBA + s, c_buf) != 0 ||
+            virtio_blk_write(FS_SUPER_LBA + s, c_buf) != 0) {
+            kmutex_unlock(&vfs_mutex);
+            return -1;
+        }
+    }
+
+    /* Recargar archivos a memoria */
+    for (int i = 0; i < FS_MAX_FILES; ++i) {
+        load_file_from_disk(i);
+    }
+
+    kmutex_unlock(&vfs_mutex);
+    return 0;
 }

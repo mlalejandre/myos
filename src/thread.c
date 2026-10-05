@@ -1,6 +1,7 @@
 #include "fs.h"
 #include "sysinfo.h"
 #include "thread.h"
+#include "mutex.h"
 #include "vmm.h"
 #include "pmm.h"
 #include "mem.h"
@@ -51,14 +52,30 @@ static uint64_t allocate_thread_stack(uint32_t tid)
     /* 1. Desmapear la pagina de guarda (offset 0) */
     vmm_unmap_page(slot);
 
-    /* 2. Mapear 3 paginas consecutivas (12 KiB) a partir de slot + 4096 */
+    /* 2. Mapear paginas de pila a partir de slot + 4096 con rollback atomico */
     for (uint64_t p = 1; p <= THREAD_STACK_PAGES; ++p) {
         uintptr_t frame = pmm_alloc_frame();
-        if (!frame) return 0;
+        if (!frame) {
+            /* Rollback de todas las paginas previamente asignadas 1..(p-1) */
+            for (uint64_t k = 1; k < p; ++k) {
+                uint64_t v = slot + k * VMM_PAGE_SIZE;
+                uint64_t pa = vmm_virt_to_phys(v);
+                vmm_unmap_page(v);
+                if (pa) pmm_free_frame((uintptr_t)pa);
+            }
+            return 0;
+        }
 
         uint64_t vaddr = slot + p * VMM_PAGE_SIZE;
         if (vmm_map_page(vaddr, (uint64_t)frame, VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_NX) != 0) {
             pmm_free_frame(frame);
+            /* Rollback de todas las paginas previamente asignadas 1..(p-1) */
+            for (uint64_t k = 1; k < p; ++k) {
+                uint64_t v = slot + k * VMM_PAGE_SIZE;
+                uint64_t pa = vmm_virt_to_phys(v);
+                vmm_unmap_page(v);
+                if (pa) pmm_free_frame((uintptr_t)pa);
+            }
             return 0;
         }
     }
@@ -327,12 +344,39 @@ void thread_sleep(uint32_t ms)
 void thread_exit(void)
 {
     if (!curr_thread) return;
+    kmutex_release_all_for_thread(curr_thread);
     curr_thread->state = THREAD_STATE_DEAD;
     schedule();
 
     for (;;) {
         __asm__ volatile ("hlt");
     }
+}
+
+int thread_kill(uint32_t tid)
+{
+    if (!multitasking_active || !thread_list) return 0;
+    /* Blindaje: hilos criticos del sistema (0: kmain, 1: idle, 2: netd, 3: sysmon) */
+    if (tid <= 3) return 0;
+
+    struct tcb *t = thread_list;
+    do {
+        if (t->tid == tid) {
+            if (t->state != THREAD_STATE_DEAD) {
+                kmutex_release_all_for_thread(t);
+                t->state = THREAD_STATE_DEAD;
+                if (t == curr_thread) {
+                    schedule();
+                    for (;;) { __asm__ volatile ("hlt"); }
+                }
+                return 1;
+            }
+            return 0;
+        }
+        t = t->next;
+    } while (t != thread_list);
+
+    return 0;
 }
 
 void thread_dump(void)

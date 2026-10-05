@@ -39,6 +39,9 @@ void thread_sleep(uint32_t ms);
 /* Finaliza el hilo actual marcandolo como DEAD */
 void thread_exit(void);
 
+/* Termina forzosamente un hilo no protegido por su TID (1 = exito, 0 = error o protegido) */
+int thread_kill(uint32_t tid);
+
 /* Devuelve el TCB del hilo actualmente en ejecucion */
 struct tcb *thread_current(void);
 

@@ -49,7 +49,7 @@ static int build_chat_payload_mode(const char *prompt, char *dst, uint32_t max, 
     const char *prefix = 
         "{\"model\":\"nail-35b\","
         "\"messages\":["
-        "{\"role\":\"system\",\"content\":\"Eres el nucleo de inteligencia artificial de MYOS x86_64. No uses bloques de pensamiento <think>. Responde estrictamente con el objeto JSON solicitado sin preambulos.\"},"
+        "{\"role\":\"system\",\"content\":\"Eres el nucleo de inteligencia artificial de SOMA (Sistema Operativo Multi-Agente) x86_64. No uses bloques de pensamiento <think>. Responde estrictamente con el objeto JSON solicitado sin preambulos.\"},"
         "{\"role\":\"user\",\"content\":\"";
 
     const char *suffix_plain = "\"}],\"temperature\":0.2,\"max_tokens\":2048}";
@@ -319,7 +319,7 @@ static int llm_chat_unlocked(const char *prompt, char *reply_out, uint32_t reply
 void net_run_llm_test(void)
 {
     kprint("\n============================================================\n");
-    kprint("MYOS - HTTP & LLM INTEGRATION TEST\n");
+    kprint("SOMA - HTTP & LLM INTEGRATION TEST\n");
     kprint("Target server: ");
     kprint_ip(llm_ip);
     kprint(":8087 (model: nail-35b)\n");
@@ -338,7 +338,7 @@ void net_run_llm_test(void)
     kprint("LLM: health check OK (HTTP 200 OK)\n");
 
     kprint("\n[STEP 2] Testing LLM Chat Completion (POST /v1/chat/completions)...\n");
-    static const char test_prompt[] = "Responde unicamente: MYOS TEST OK";
+    static const char test_prompt[] = "Responde unicamente: SOMA TEST OK";
     kprint("Prompt: \"");
     kprint(test_prompt);
     kprint("\"\n");

@@ -1,3 +1,4 @@
+#include "arch.h"
 #include <stdint.h>
 #include "pci.h"
 #include "virtio_net.h"
@@ -107,23 +108,7 @@ static void clear_screen(void)
     console_clear();
 }
 
-static void vga_print_at(
-    const char *s,
-    uint32_t row,
-    uint32_t col
-)
-{
-    uint32_t pos = row * 80 + col;
-
-    for (uint32_t i = 0;
-         s[i] != '\0' && pos < 80 * 25;
-         ++i, ++pos)
-    {
-        VGA[pos] =
-            ((uint16_t)0x07 << 8) |
-            (uint8_t)s[i];
-    }
-}
+/* vga_print_at retirada: salida unificada por somafetch */
 
 static void pci_scan(void)
 {
@@ -330,6 +315,7 @@ static const char *pci_device_name(uint16_t vendor, uint16_t device)
 
 static void fb_putc(char *out, uint32_t max, uint32_t *pos, char c)
 {
+    if (!out || max == 0) return;
     if (*pos + 1 < max) {
         out[(*pos)++] = c;
         out[*pos] = '\0';
@@ -338,6 +324,7 @@ static void fb_putc(char *out, uint32_t max, uint32_t *pos, char c)
 
 static void fb_puts(char *out, uint32_t max, uint32_t *pos, const char *s)
 {
+    if (!out || max == 0 || !pos || *pos >= max - 1) return;
     while (*s && *pos + 1 < max) {
         out[(*pos)++] = *s++;
     }
@@ -412,9 +399,485 @@ static int pci_format_scan(char *out, uint32_t max)
 }
 
 
+static uint8_t cmos_read(uint8_t reg)
+{
+    outb(0x70, reg);
+    return inb(0x71);
+}
+
+static int cmos_is_updating(void)
+{
+    outb(0x70, 0x0A);
+    return (inb(0x71) & 0x80);
+}
+
+static uint8_t bcd2bin(uint8_t val)
+{
+    return ((val >> 4) * 10) + (val & 0x0F);
+}
+
+struct rtc_time {
+    uint16_t year;
+    uint8_t  month;
+    uint8_t  day;
+    uint8_t  hour;
+    uint8_t  min;
+    uint8_t  sec;
+};
+
+static void rtc_get_datetime(struct rtc_time *t)
+{
+    while (cmos_is_updating()) cpu_pause();
+    t->sec   = cmos_read(0x00);
+    t->min   = cmos_read(0x02);
+    t->hour  = cmos_read(0x04);
+    t->day   = cmos_read(0x07);
+    t->month = cmos_read(0x08);
+    uint8_t yr = cmos_read(0x09);
+    uint8_t reg_b = cmos_read(0x0B);
+
+    if (!(reg_b & 0x04)) {
+        t->sec   = bcd2bin(t->sec);
+        t->min   = bcd2bin(t->min);
+        t->hour  = bcd2bin(t->hour & 0x7F) | (t->hour & 0x80);
+        t->day   = bcd2bin(t->day);
+        t->month = bcd2bin(t->month);
+        yr       = bcd2bin(yr);
+    }
+    if (!(reg_b & 0x02) && (t->hour & 0x80)) {
+        t->hour = (uint8_t)(((t->hour & 0x7F) + 12) % 24);
+    }
+    t->year = 2000 + yr;
+}
+
+#define NANO_MAX_SIZE 4096
+static char nano_buf[NANO_MAX_SIZE];
+
+static void nano_draw_bar(uint32_t row, const char *text, uint8_t attr)
+{
+    uint32_t col = 0;
+    while (text[col] && col < 80) {
+        VGA[row * 80 + col] = (uint16_t)((attr << 8) | (uint8_t)text[col]);
+        col++;
+    }
+    while (col < 80) {
+        VGA[row * 80 + col] = (uint16_t)((attr << 8) | ' ');
+        col++;
+    }
+}
+
+static void run_nano(const char *filename)
+{
+    if (!filename || filename[0] == '\0') {
+        kprint("Uso: nano <archivo>\n");
+        return;
+    }
+
+    int r = vfs_read(filename, nano_buf, sizeof(nano_buf) - 1);
+    uint32_t buf_len = (r > 0) ? (uint32_t)r : 0;
+    nano_buf[buf_len] = '\0';
+
+    uint32_t cursor_pos = 0;
+    uint32_t top_line = 0;
+    int dirty = 0;
+    char status_msg[64];
+    status_msg[0] = '\0';
+
+    console_clear();
+
+    for (;;) {
+        /* 1. Calcular linea y columna del cursor */
+        uint32_t cur_line = 0;
+        uint32_t cur_col = 0;
+        for (uint32_t i = 0; i < cursor_pos; ++i) {
+            if (nano_buf[i] == '\n') {
+                cur_line++;
+                cur_col = 0;
+            } else {
+                cur_col++;
+            }
+        }
+
+        /* Ajustar scroll vertical */
+        if (cur_line < top_line) top_line = cur_line;
+        if (cur_line >= top_line + 22) top_line = cur_line - 21;
+
+        /* 2. Dibujar barra superior */
+        char hdr[80]; uint32_t hp = 0;
+        const char *h1 = " [ SOMA nano 0.2 ]  Archivo: "; while (*h1) hdr[hp++] = *h1++;
+        const char *h2 = filename; while (*h2 && hp < 50) hdr[hp++] = *h2++;
+        const char *h3 = dirty ? "  [Modificado]" : "  [Limpio]"; while (*h3 && hp < 79) hdr[hp++] = *h3++;
+        hdr[hp] = '\0';
+        nano_draw_bar(0, hdr, 0x70);
+
+        /* 3. Renderizar texto (filas 1 a 22) */
+        uint32_t scan_l = 0;
+        uint32_t p = 0;
+        while (p < buf_len && scan_l < top_line) {
+            if (nano_buf[p++] == '\n') scan_l++;
+        }
+
+        for (uint32_t row = 1; row <= 22; ++row) {
+            uint32_t col = 0;
+            if (p < buf_len && scan_l >= top_line) {
+                while (p < buf_len && nano_buf[p] != '\n') {
+                    if (col < 80) {
+                        VGA[row * 80 + col] = (uint16_t)(0x0700 | (uint8_t)nano_buf[p]);
+                        col++;
+                    }
+                    p++;
+                }
+                if (p < buf_len && nano_buf[p] == '\n') p++;
+                scan_l++;
+            }
+            while (col < 80) {
+                VGA[row * 80 + col] = 0x0720;
+                col++;
+            }
+        }
+
+        /* 4. Dibujar barra de estado (fila 23) */
+        char st[80]; uint32_t sp = 0;
+        if (status_msg[0]) {
+            const char *s = status_msg; while (*s && sp < 79) st[sp++] = *s++;
+        } else {
+            const char *s = "Linea: "; while (*s) st[sp++] = *s++;
+            uint32_t val = cur_line + 1; char tb[10]; int tn=0; while(val){tb[tn++]='0'+(val%10); val/=10;} while(tn) st[sp++]=tb[--tn];
+            s = ", Col: "; while (*s) st[sp++] = *s++;
+            val = cur_col + 1; tn=0; while(val){tb[tn++]='0'+(val%10); val/=10;} while(tn) st[sp++]=tb[--tn];
+            s = " | Tamano: "; while (*s) st[sp++] = *s++;
+            val = buf_len; if(val==0) st[sp++]='0'; else { tn=0; while(val){tb[tn++]='0'+(val%10); val/=10;} while(tn) st[sp++]=tb[--tn]; }
+            s = " B"; while (*s) st[sp++] = *s++;
+        }
+        st[sp] = '\0';
+        nano_draw_bar(23, st, 0x0F);
+
+        /* 5. Dibujar atajos (fila 24) */
+        nano_draw_bar(24, " ^S Guardar    ^X Salir    ^P/^N Arriba/Abajo    ^B/^F Izq/Der ", 0x70);
+
+        /* 6. Mover cursor de hardware */
+        uint32_t scr_row = 1 + (cur_line - top_line);
+        uint32_t scr_col = (cur_col < 80) ? cur_col : 79;
+        uint16_t cpos = (uint16_t)(scr_row * 80 + scr_col);
+        outb(0x3D4, 0x0F); outb(0x3D5, (uint8_t)(cpos & 0xFF));
+        outb(0x3D4, 0x0E); outb(0x3D5, (uint8_t)((cpos >> 8) & 0xFF));
+
+        /* 7. Procesar tecla */
+        char ch = kgetc();
+        status_msg[0] = '\0';
+
+        if (ch == 24) { /* Ctrl+X: Salir */
+            break;
+        } else if (ch == 19) { /* Ctrl+S: Guardar */
+            if (vfs_write(filename, nano_buf, buf_len) >= 0) {
+                dirty = 0;
+                const char *ok = "[Guardado con exito en RamFS / virtio-blk]";
+                uint32_t k = 0; while (*ok) status_msg[k++] = *ok++; status_msg[k] = '\0';
+            } else {
+                const char *err = "[Error de I/O al guardar archivo]";
+                uint32_t k = 0; while (*err) status_msg[k++] = *err++; status_msg[k] = '\0';
+            }
+            continue;
+        } else if (ch == 2) { /* Ctrl+B o Flecha Izq */
+            if (cursor_pos > 0) cursor_pos--;
+        } else if (ch == 6) { /* Ctrl+F o Flecha Der */
+            if (cursor_pos < buf_len) cursor_pos++;
+        } else if (ch == 16) { /* Ctrl+P o Flecha Arriba */
+            if (cur_line > 0) {
+                uint32_t target_col = cur_col;
+                while (cursor_pos > 0 && nano_buf[cursor_pos - 1] != '\n') cursor_pos--;
+                if (cursor_pos > 0) cursor_pos--; /* saltar el '\n' */
+                uint32_t line_start = cursor_pos;
+                while (line_start > 0 && nano_buf[line_start - 1] != '\n') line_start--;
+                uint32_t line_len = cursor_pos - line_start;
+                cursor_pos = line_start + ((target_col < line_len) ? target_col : line_len);
+            }
+        } else if (ch == 14) { /* Ctrl+N o Flecha Abajo */
+            uint32_t target_col = cur_col;
+            uint32_t next_line = cursor_pos;
+            while (next_line < buf_len && nano_buf[next_line] != '\n') next_line++;
+            if (next_line < buf_len) {
+                next_line++; /* avanzar tras '\n' */
+                uint32_t line_len = 0;
+                while (next_line + line_len < buf_len && nano_buf[next_line + line_len] != '\n') line_len++;
+                cursor_pos = next_line + ((target_col < line_len) ? target_col : line_len);
+            }
+        } else if (ch == '\b' || ch == 127) { /* Backspace */
+            if (cursor_pos > 0) {
+                for (uint32_t i = cursor_pos - 1; i < buf_len; ++i) {
+                    nano_buf[i] = nano_buf[i + 1];
+                }
+                buf_len--;
+                cursor_pos--;
+                dirty = 1;
+            }
+        } else if (ch == '\r' || ch == '\n') { /* Enter */
+            if (buf_len < NANO_MAX_SIZE - 2) {
+                for (uint32_t i = buf_len + 1; i > cursor_pos; --i) {
+                    nano_buf[i] = nano_buf[i - 1];
+                }
+                nano_buf[cursor_pos] = '\n';
+                buf_len++;
+                cursor_pos++;
+                nano_buf[buf_len] = '\0';
+                dirty = 1;
+            }
+        } else if ((uint8_t)ch >= 32 && (uint8_t)ch < 127) { /* Caracter imprimible */
+            if (buf_len < NANO_MAX_SIZE - 2) {
+                for (uint32_t i = buf_len + 1; i > cursor_pos; --i) {
+                    nano_buf[i] = nano_buf[i - 1];
+                }
+                nano_buf[cursor_pos] = ch;
+                buf_len++;
+                cursor_pos++;
+                nano_buf[buf_len] = '\0';
+                dirty = 1;
+            }
+        }
+    }
+
+    console_clear();
+    kprint("[nano: sesion finalizada para '"); kprint(filename); kprint("']\n");
+}
+
+static void system_reboot(void)
+{
+    kprint("\n[REBOOT] Sincronizando discos...\n");
+    vfs_sync();
+    kprint("[REBOOT] Reiniciando procesador (8042 reset)...\n");
+    for (int i = 0; i < 10000; ++i) {
+        if ((inb(0x64) & 0x02) == 0) break;
+    }
+    outb(0x64, 0xFE);
+    struct { uint16_t limit; uint64_t base; } __attribute__((packed)) null_idtr = { 0, 0 };
+    __asm__ volatile ("lidt %0; int3" : : "m"(null_idtr));
+    for (;;) { __asm__ volatile ("cli; hlt"); }
+}
+
+static void system_poweroff(void)
+{
+    kprint("\n[POWEROFF] Sincronizando discos...\n");
+    vfs_sync();
+    kprint("[POWEROFF] Apagando maquina (ACPI)...\n");
+    outw(0x604, 0x2000);
+    outw(0xB004, 0x2000);
+    outw(0x4004, 0x3400);
+    outb(0xF4, 0x00);
+    kprint("Apagado completado. Deteniendo CPU.\n");
+    for (;;) { __asm__ volatile ("cli; hlt"); }
+}
+
+static void do_hexdump(const char *filename, uint32_t max_bytes, char *out_buf, uint32_t max_out)
+{
+    static char hbuf[4096];
+    uint32_t pos = 0;
+    int r = vfs_read(filename, hbuf, sizeof(hbuf));
+    if (r < 0) {
+        kprint("hexdump: archivo no encontrado: '"); kprint(filename); kprint("'\n");
+        if (out_buf) fb_puts(out_buf, max_out, &pos, "hexdump: archivo no encontrado");
+        return;
+    }
+    uint32_t total = (uint32_t)r;
+    uint32_t limit = (max_bytes > 0 && max_bytes < total) ? max_bytes : total;
+    if (limit > 128) limit = 128; /* Limite razonable para buffer de telemetria IA */
+
+    kprint("\nHEXDUMP de '"); kprint(filename); kprint("' ("); kprint_dec(total); kprint(" bytes):\n");
+    kprint("Offset    00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  |ASCII           |\n");
+    kprint("--------  -----------------------  -----------------------  |----------------|\n");
+
+    const char hexchars[] = "0123456789ABCDEF";
+    for (uint32_t off = 0; off < limit; off += 16) {
+        for (int sh = 28; sh >= 0; sh -= 4) {
+            char hc = hexchars[(off >> sh) & 0x0F];
+            kputc(hc);
+            if (out_buf && pos < max_out - 1) out_buf[pos++] = hc;
+        }
+        kprint(": ");
+        if (out_buf && pos < max_out - 2) { out_buf[pos++] = ':'; out_buf[pos++] = ' '; }
+
+        for (uint32_t i = 0; i < 16; ++i) {
+            if (off + i < limit) {
+                uint8_t b = (uint8_t)hbuf[off + i];
+                char h1 = hexchars[(b >> 4) & 0x0F];
+                char h2 = hexchars[b & 0x0F];
+                kputc(h1); kputc(h2); kputc(' ');
+                if (out_buf && pos < max_out - 3) {
+                    out_buf[pos++] = h1; out_buf[pos++] = h2; out_buf[pos++] = ' ';
+                }
+            } else {
+                kprint("   ");
+                if (out_buf && pos < max_out - 3) {
+                    out_buf[pos++] = ' '; out_buf[pos++] = ' '; out_buf[pos++] = ' ';
+                }
+            }
+            if (i == 7) {
+                kputc(' ');
+                if (out_buf && pos < max_out - 1) out_buf[pos++] = ' ';
+            }
+        }
+        kprint(" |");
+        if (out_buf && pos < max_out - 2) { out_buf[pos++] = ' '; out_buf[pos++] = '|'; }
+
+        for (uint32_t i = 0; i < 16 && off + i < limit; ++i) {
+            uint8_t c = (uint8_t)hbuf[off + i];
+            char printable = (c >= 32 && c < 127) ? (char)c : '.';
+            kputc(printable);
+            if (out_buf && pos < max_out - 1) out_buf[pos++] = printable;
+        }
+        kprint("|\n");
+        if (out_buf && pos < max_out - 2) { out_buf[pos++] = '|'; out_buf[pos++] = '\n'; }
+    }
+    if (out_buf) out_buf[pos] = '\0';
+    kprint("\n");
+}
+
+static void show_somafetch(char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0;
+    uint64_t ms = timer_get_uptime_ms();
+    uint32_t s = (uint32_t)(ms / 1000);
+    uint32_t m = s / 60; s %= 60;
+    uint32_t h = m / 60; m %= 60;
+
+    size_t f_free = 0, f_used = 0, f_total = 0;
+    pmm_get_stats(&f_free, &f_used, &f_total);
+    uint32_t ram_tot = (uint32_t)((f_total * 4096) / (1024 * 1024));
+    uint32_t ram_usd = (uint32_t)((f_used * 4096) / (1024 * 1024));
+    uint32_t ram_pct = f_total ? (uint32_t)((f_used * 100) / f_total) : 0;
+
+    size_t h_used = 0, h_free = 0;
+    kheap_stats(&h_used, &h_free);
+
+    uint32_t files_u = 0, bytes_u = 0, dirty_c = 0;
+    vfs_get_stats(&files_u, &bytes_u, &dirty_c);
+
+    kprint("\n");
+    fb_puts(out_buf, max_out, &pos, "\n");
+
+    /* Tipografia original restaurada, acolchada exactamente a 31 columnas */
+    kprint("\033[1;36m  ____  ____  __  __    _      \033[1;33mOS:     \033[1;37mSOMA v0.2 \033[0;36m(Multi-Agente)\033[0m\n");
+    fb_puts(out_buf, max_out, &pos, "  ____  ____  __  __    _      OS:     SOMA v0.2 (Multi-Agente)\n");
+
+    kprint("\033[1;36m / ___|/ __ \\|  \\/  |  / \\     \033[1;33mKernel: \033[1;37mx86_64 Bare-Metal \033[1;32m(HAL v1)\033[0m\n");
+    fb_puts(out_buf, max_out, &pos, " / ___|/ __ \\|  \\/  |  / \\     Kernel: x86_64 Bare-Metal (HAL v1)\n");
+
+    kprint("\033[1;36m \\___ \\ |  | | |\\/| | / _ \\    \033[1;33mUptime: \033[1;37m");
+    fb_puts(out_buf, max_out, &pos, " \\___ \\ |  | | |\\/| | / _ \\    Uptime: ");
+    if (h > 0) { kprint_dec(h); kprint("h "); fb_put_dec(out_buf, max_out, &pos, h); fb_puts(out_buf, max_out, &pos, "h "); }
+    if (m > 0 || h > 0) { kprint_dec(m); kprint("m "); fb_put_dec(out_buf, max_out, &pos, m); fb_puts(out_buf, max_out, &pos, "m "); }
+    kprint_dec(s); kprint("s \033[0;32m(PIT 1 kHz)\033[0m\n");
+    fb_put_dec(out_buf, max_out, &pos, s); fb_puts(out_buf, max_out, &pos, "s (PIT 1 kHz)\n");
+
+    kprint("\033[1;36m  ___)| |__| | |  | |/ ___ \\  \033[1;33m CPU:    \033[1;37mRing 0 \033[1;35m(CR0:WP, NXE)\033[0m\n");
+    fb_puts(out_buf, max_out, &pos, "  ___) | |__| | |  | |/ ___ \\  CPU:    Ring 0 (CR0:WP, NXE)\n");
+
+    kprint("\033[1;36m |____/\\____/|_|  |_/_/   \\_\\  \033[1;33mRAM:    \033[1;37m");
+    fb_puts(out_buf, max_out, &pos, " |____/\\____/|_|  |_/_/   \\_\\  RAM:    ");
+    kprint_dec(ram_usd); kprint("/"); kprint_dec(ram_tot); kprint(" MiB \033[1;32m("); kprint_dec(ram_pct); kprint("% PMM)\033[0m\n");
+    fb_put_dec(out_buf, max_out, &pos, ram_usd); fb_puts(out_buf, max_out, &pos, "/");
+    fb_put_dec(out_buf, max_out, &pos, ram_tot); fb_puts(out_buf, max_out, &pos, " MiB (");
+    fb_put_dec(out_buf, max_out, &pos, ram_pct); fb_puts(out_buf, max_out, &pos, "% PMM)\n");
+
+    kprint("                               \033[1;33mHeap:   \033[1;37m");
+    fb_puts(out_buf, max_out, &pos, "                               Heap:   ");
+    kprint_dec((uint32_t)(h_used / 1024)); kprint(" KiB / \033[1;32m"); kprint_dec((uint32_t)(h_free / 1024)); kprint(" KiB libres\033[0m\n");
+    fb_put_dec(out_buf, max_out, &pos, (uint32_t)(h_used / 1024)); fb_puts(out_buf, max_out, &pos, " KiB / ");
+    fb_put_dec(out_buf, max_out, &pos, (uint32_t)(h_free / 1024)); fb_puts(out_buf, max_out, &pos, " KiB libres\n");
+
+    kprint("                               \033[1;33mDisco:  \033[1;37mRamFS \033[0;36m(16 MiB virtio-blk)\033[0m\n");
+    fb_puts(out_buf, max_out, &pos, "                               Disco:  RamFS (16 MiB virtio-blk)\n");
+
+    kprint("                               \033[1;33mRed:    \033[1;37m10.0.2.15 \033[0;32m(VirtIO-NET NAT)\033[0m\n");
+    fb_puts(out_buf, max_out, &pos, "                               Red:    10.0.2.15 (VirtIO-NET NAT)\n");
+
+    kprint("                               \033[1;33mAgente: \033[1;37mnail-35b \033[1;35m(ReAct LAN)\033[0m\n\n");
+    fb_puts(out_buf, max_out, &pos, "                               Agente: nail-35b (ReAct LAN)\n\n");
+}
+
 /* ---- Despachador unificado de comandos (Shell y Agente) ---------- */
+struct bg_job {
+    char cmd[256];
+    uint32_t tid;
+    char log_file[64];
+};
+
+static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out);
+
+static void spawn_job_worker(void *arg)
+{
+    struct bg_job *job = (struct bg_job *)arg;
+    if (!job) return;
+
+    char *out_buf = (char *)kmalloc(2048);
+    if (out_buf) {
+        out_buf[0] = '\0';
+        dispatch_command(job->cmd, out_buf, 2048);
+
+        if (out_buf[0] != '\0') {
+            uint32_t len = 0;
+            while (out_buf[len]) len++;
+            vfs_write(job->log_file, out_buf, len);
+        }
+        kfree(out_buf);
+    }
+
+    kprint("\n[JOB TID ");
+    kprint_dec(job->tid);
+    kprint(" ('");
+    kprint(job->cmd);
+    kprint("') FINALIZADO -> Salida: ");
+    kprint(job->log_file);
+    kprint("]\nsoma> ");
+
+    kfree(job);
+}
+
 static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_out)
 {
+    static int redir_active = 0;
+    static char redir_buf[4096];
+
+    /* Interceptor de Redireccion Universal ('>') */
+    if (!redir_active) {
+        int gt_idx = -1;
+        int in_q = 0;
+        for (int i = 0; cmd_line[i]; ++i) {
+            if (cmd_line[i] == '\'' || cmd_line[i] == '"') in_q = !in_q;
+            else if (!in_q && cmd_line[i] == '>') { gt_idx = i; break; }
+        }
+        if (gt_idx >= 0) {
+            char sub_cmd[256];
+            char dst_file[64];
+            int sp = 0, dp = 0;
+            for (int i = 0; i < gt_idx && sp < 255; ++i) sub_cmd[sp++] = cmd_line[i];
+            while (sp > 0 && sub_cmd[sp - 1] == ' ') sp--;
+            sub_cmd[sp] = '\0';
+            const char *p = cmd_line + gt_idx + 1;
+            while (*p == ' ') p++;
+            while (*p && *p != ' ' && dp < 63) dst_file[dp++] = *p++;
+            dst_file[dp] = '\0';
+            if (sp > 0 && dp > 0) {
+                redir_active = 1;
+                console_muted = 1;
+                redir_buf[0] = '\0';
+                int res = dispatch_command(sub_cmd, redir_buf, sizeof(redir_buf));
+                console_muted = 0;
+                redir_active = 0;
+                if (res) {
+                    uint32_t rlen = 0;
+                    while (redir_buf[rlen]) rlen++;
+                    vfs_write(dst_file, redir_buf, rlen);
+                    kprint("Salida redirigida con exito a '"); kprint(dst_file); kprint("' (");
+                    kprint_dec(rlen); kprint(" bytes)\n");
+                    uint32_t pos = 0;
+                    fb_puts(out_buf, max_out, &pos, "Salida redirigida a ");
+                    fb_puts(out_buf, max_out, &pos, dst_file);
+                    return 1;
+                }
+            }
+        }
+    }
+
     if (cmd_line[0] == 'p' && cmd_line[1] == 's' && (cmd_line[2] == '\0' || cmd_line[2] == ' ')) {
         thread_dump();
         kmutex_test_self();
@@ -451,10 +914,484 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
         return 1;
     }
 
+    if ((cmd_line[0] == 's' && cmd_line[1] == 'o' && cmd_line[2] == 'm' && cmd_line[3] == 'a' && cmd_line[4] == 'f' && cmd_line[5] == 'e' && cmd_line[6] == 't' && cmd_line[7] == 'c' && cmd_line[8] == 'h') ||
+        (cmd_line[0] == 'n' && cmd_line[1] == 'e' && cmd_line[2] == 'o' && cmd_line[3] == 'f' && cmd_line[4] == 'e' && cmd_line[5] == 't' && cmd_line[6] == 'c' && cmd_line[7] == 'h') ||
+        (cmd_line[0] == 'f' && cmd_line[1] == 'e' && cmd_line[2] == 't' && cmd_line[3] == 'c' && cmd_line[4] == 'h' && (cmd_line[5] == '\0' || cmd_line[5] == ' '))) {
+        show_somafetch(out_buf, max_out);
+        return 1;
+    }
+
     while (*cmd_line == ' ') cmd_line++;
 
+            if ((cmd_line[0] == 'n' && cmd_line[1] == 'a' && cmd_line[2] == 'n' && cmd_line[3] == 'o' && (cmd_line[4] == ' ' || cmd_line[4] == '\0')) ||
+        (cmd_line[0] == 'e' && cmd_line[1] == 'd' && cmd_line[2] == 'i' && cmd_line[3] == 't' && (cmd_line[4] == ' ' || cmd_line[4] == '\0'))) {
+        const char *p = (cmd_line[0] == 'n') ? (cmd_line + 4) : (cmd_line + 4);
+        while (*p == ' ') p++;
+        if (*p == '\0') {
+            kprint("Uso: nano <archivo>\n");
+            uint32_t pos = 0; fb_puts(out_buf, max_out, &pos, "Uso: nano <archivo>");
+            return 1;
+        }
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        run_nano(fn);
+        uint32_t pos = 0; fb_puts(out_buf, max_out, &pos, "nano cerrado.");
+        return 1;
+    }
+
+    if (cmd_line[0] == 'g' && cmd_line[1] == 'r' && cmd_line[2] == 'e' && cmd_line[3] == 'p' && cmd_line[4] == ' ') {
+        const char *p = cmd_line + 5;
+        while (*p == ' ') p++;
+        char pat[64]; uint32_t pi = 0;
+        char q = 0;
+        if (*p == '\'' || *p == '"') q = *p++;
+        while (*p && pi < sizeof(pat) - 1) {
+            if (q && *p == q) { p++; break; }
+            if (!q && *p == ' ') break;
+            pat[pi++] = *p++;
+        }
+        pat[pi] = '\0';
+        while (*p == ' ') p++;
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        if (pi == 0 || fi == 0) {
+            kprint("Uso: grep <patron> <archivo>\n");
+            uint32_t pos = 0; fb_puts(out_buf, max_out, &pos, "Uso: grep <patron> <archivo>");
+            return 1;
+        }
+        static char gbuf[4096];
+        int r = vfs_read(fn, gbuf, sizeof(gbuf) - 1);
+        uint32_t pos = 0;
+        if (r < 0) {
+            kprint("grep: archivo no encontrado: '"); kprint(fn); kprint("'\n");
+            fb_puts(out_buf, max_out, &pos, "grep: archivo no encontrado");
+            return 1;
+        }
+        gbuf[r] = '\0';
+        uint32_t line_num = 1;
+        uint32_t start = 0;
+        int matches = 0;
+        for (int i = 0; i <= r; ++i) {
+            if (gbuf[i] == '\n' || gbuf[i] == '\0') {
+                gbuf[i] = '\0';
+                const char *line = gbuf + start;
+                if (find_substr(line, pat)) {
+                    matches++;
+                    kprint_dec(line_num); kprint(": "); kprint(line); kprint("\n");
+                    fb_put_dec(out_buf, max_out, &pos, line_num); fb_puts(out_buf, max_out, &pos, ": ");
+                    fb_puts(out_buf, max_out, &pos, line); fb_puts(out_buf, max_out, &pos, "\n");
+                }
+                line_num++;
+                start = (uint32_t)(i + 1);
+            }
+        }
+        if (matches == 0) {
+            kprint("grep: sin coincidencias.\n");
+            fb_puts(out_buf, max_out, &pos, "grep: sin coincidencias.");
+        }
+        return 1;
+    }
+
+    if (cmd_line[0] == 'e' && cmd_line[1] == 'c' && cmd_line[2] == 'h' && cmd_line[3] == 'o' && (cmd_line[4] == ' ' || cmd_line[4] == '\0')) {
+        const char *t = cmd_line + 4;
+        while (*t == ' ') t++;
+        char clean[512]; uint32_t ci = 0;
+        char q = 0;
+        if (*t == '\'' || *t == '"') q = *t++;
+        while (*t && ci < sizeof(clean) - 1) {
+            if (q && *t == q) { t++; break; }
+            clean[ci++] = *t++;
+        }
+        clean[ci] = '\0';
+        kprint(clean); kprint("\n");
+        uint32_t pos = 0;
+        fb_puts(out_buf, max_out, &pos, clean); fb_putc(out_buf, max_out, &pos, '\n');
+        return 1;
+    }
+
+    if ((cmd_line[0] == 'h' && cmd_line[1] == 'e' && cmd_line[2] == 'x' && cmd_line[3] == 'd' && cmd_line[4] == 'u' && cmd_line[5] == 'm' && cmd_line[6] == 'p' && cmd_line[7] == ' ') ||
+        (cmd_line[0] == 'x' && cmd_line[1] == 'x' && cmd_line[2] == 'd' && cmd_line[3] == ' ')) {
+        const char *p = (cmd_line[0] == 'h') ? (cmd_line + 8) : (cmd_line + 4);
+        while (*p == ' ') p++;
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        while (*p == ' ') p++;
+        uint32_t maxb = 256;
+        if (*p >= '0' && *p <= '9') {
+            maxb = 0;
+            while (*p >= '0' && *p <= '9') maxb = maxb * 10 + (*p++ - '0');
+        }
+        do_hexdump(fn, maxb, out_buf, max_out);
+        return 1;
+    }
+
+    if (cmd_line[0] == 'r' && cmd_line[1] == 'e' && cmd_line[2] == 'b' && cmd_line[3] == 'o' && cmd_line[4] == 'o' && cmd_line[5] == 't') {
+        system_reboot();
+        return 1;
+    }
+
+    if ((cmd_line[0] == 'p' && cmd_line[1] == 'o' && cmd_line[2] == 'w' && cmd_line[3] == 'e' && cmd_line[4] == 'r' && cmd_line[5] == 'o' && cmd_line[6] == 'f' && cmd_line[7] == 'f') ||
+        (cmd_line[0] == 's' && cmd_line[1] == 'h' && cmd_line[2] == 'u' && cmd_line[3] == 't' && cmd_line[4] == 'd' && cmd_line[5] == 'o' && cmd_line[6] == 'w' && cmd_line[7] == 'n')) {
+        system_poweroff();
+        return 1;
+    }
+
+    if (cmd_line[0] == 'h' && cmd_line[1] == 'a' && cmd_line[2] == 'l' && cmd_line[3] == 't') {
+        kprint("Sincronizando disco persistente...\n");
+        vfs_sync();
+        kprint("Sistema detenido (HALT). Es seguro apagar el equipo.\n");
+        for (;;) { __asm__ volatile ("cli; hlt"); }
+        return 1;
+    }
+
+if (cmd_line[0] == 'd' && cmd_line[1] == 'a' && cmd_line[2] == 't' && cmd_line[3] == 'e' && (cmd_line[4] == '\0' || cmd_line[4] == ' ')) {
+        struct rtc_time t;
+        rtc_get_datetime(&t);
+        char date_str[64]; uint32_t dp = 0;
+        fb_puts(date_str, sizeof(date_str), &dp, "RTC: ");
+        fb_put_dec(date_str, sizeof(date_str), &dp, t.year); fb_putc(date_str, sizeof(date_str), &dp, '-');
+        if (t.month < 10) fb_putc(date_str, sizeof(date_str), &dp, '0');
+        fb_put_dec(date_str, sizeof(date_str), &dp, t.month); fb_putc(date_str, sizeof(date_str), &dp, '-');
+        if (t.day < 10) fb_putc(date_str, sizeof(date_str), &dp, '0');
+        fb_put_dec(date_str, sizeof(date_str), &dp, t.day); fb_putc(date_str, sizeof(date_str), &dp, ' ');
+        if (t.hour < 10) fb_putc(date_str, sizeof(date_str), &dp, '0');
+        fb_put_dec(date_str, sizeof(date_str), &dp, t.hour); fb_putc(date_str, sizeof(date_str), &dp, ':');
+        if (t.min < 10) fb_putc(date_str, sizeof(date_str), &dp, '0');
+        fb_put_dec(date_str, sizeof(date_str), &dp, t.min); fb_putc(date_str, sizeof(date_str), &dp, ':');
+        if (t.sec < 10) fb_putc(date_str, sizeof(date_str), &dp, '0');
+        fb_put_dec(date_str, sizeof(date_str), &dp, t.sec); fb_puts(date_str, sizeof(date_str), &dp, " UTC");
+        kprint(date_str); kprint("\n");
+        uint32_t p = 0; fb_puts(out_buf, max_out, &p, date_str);
+        return 1;
+    }
+
+    if (cmd_line[0] == 't' && cmd_line[1] == 'i' && cmd_line[2] == 'm' && cmd_line[3] == 'e' && cmd_line[4] == ' ') {
+        const char *sub = cmd_line + 5;
+        while (*sub == ' ') sub++;
+        if (*sub == '\0') {
+            kprint("Uso: time <comando>\n");
+            return 1;
+        }
+        uint64_t t0 = timer_get_uptime_ms();
+        uint64_t c0 = rdtsc();
+        dispatch_command(sub, out_buf, max_out);
+        uint64_t c1 = rdtsc();
+        uint64_t t1 = timer_get_uptime_ms();
+        uint64_t ms = t1 - t0;
+        uint64_t cycles = c1 - c0;
+        kprint("\n[BENCHMARK TIME]: "); kprint_dec((uint32_t)ms); kprint(" ms | ");
+        kprint_dec((uint32_t)cycles); kprint(" ciclos TSC\n");
+        return 1;
+    }
+
+    if (cmd_line[0] == 'f' && cmd_line[1] == 'r' && cmd_line[2] == 'e' && cmd_line[3] == 'e' && (cmd_line[4] == '\0' || cmd_line[4] == ' ')) {
+        size_t f_free = 0, f_used = 0, f_total = 0;
+        pmm_get_stats(&f_free, &f_used, &f_total);
+        size_t h_used = 0, h_free = 0;
+        kheap_stats(&h_used, &h_free);
+        uint32_t ram_tot = (uint32_t)((f_total * 4096) / (1024 * 1024));
+        uint32_t ram_usd = (uint32_t)((f_used * 4096) / (1024 * 1024));
+        uint32_t ram_fre = (uint32_t)((f_free * 4096) / (1024 * 1024));
+        uint32_t ram_pct = f_total ? (uint32_t)((f_used * 100) / f_total) : 0;
+        kprint("\nESTADO DE MEMORIA (free):\n");
+        kprint("RAM Física: "); kprint_dec(ram_usd); kprint(" MiB usados / ");
+        kprint_dec(ram_tot); kprint(" MiB totales ("); kprint_dec(ram_pct); kprint("% uso). Libre: ");
+        kprint_dec(ram_fre); kprint(" MiB\n");
+        kprint("Heap VMM:   "); kprint_dec((uint32_t)(h_used / 1024)); kprint(" KiB usados / ");
+        kprint_dec((uint32_t)(h_free / 1024)); kprint(" KiB libres\n\n");
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "RAM: ");
+        fb_put_dec(out_buf, max_out, &p, ram_usd); fb_puts(out_buf, max_out, &p, "/");
+        fb_put_dec(out_buf, max_out, &p, ram_tot); fb_puts(out_buf, max_out, &p, " MiB | Heap libre: ");
+        fb_put_dec(out_buf, max_out, &p, (uint32_t)(h_free / 1024)); fb_puts(out_buf, max_out, &p, " KiB");
+        return 1;
+    }
+
+    if (cmd_line[0] == 'd' && cmd_line[1] == 'f' && (cmd_line[2] == '\0' || cmd_line[2] == ' ')) {
+        uint32_t files_u = 0, bytes_u = 0, dirty_c = 0;
+        vfs_get_stats(&files_u, &bytes_u, &dirty_c);
+        kprint("\nALMACENAMIENTO (df):\n");
+        kprint("RamFS: "); kprint_dec(files_u); kprint("/32 archivos usados | ");
+        kprint_dec(bytes_u / 1024); kprint(" KiB usados / 128 KiB capacidad\n");
+        kprint("VirtIO-BLK: 16 MiB disco total | Inodos dirty pendientes: ");
+        kprint_dec(dirty_c); kprint("\n\n");
+        uint32_t p = 0;
+        fb_puts(out_buf, max_out, &p, "RamFS: ");
+        fb_put_dec(out_buf, max_out, &p, files_u); fb_puts(out_buf, max_out, &p, "/32 archivos | ");
+        fb_put_dec(out_buf, max_out, &p, bytes_u / 1024); fb_puts(out_buf, max_out, &p, " KiB usados");
+        return 1;
+    }
+
+    if (cmd_line[0] == 't' && cmd_line[1] == 'r' && cmd_line[2] == 'e' && cmd_line[3] == 'e' && (cmd_line[4] == '\0' || cmd_line[4] == ' ')) {
+        vfs_tree(out_buf, max_out);
+        return 1;
+    }
+
+    if (cmd_line[0] == 'c' && cmd_line[1] == 'p' && cmd_line[2] == ' ') {
+        const char *p = cmd_line + 3;
+        while (*p == ' ') p++;
+        char src[48], dst[48];
+        uint32_t si = 0, di = 0;
+        while (*p && *p != ' ' && si < sizeof(src) - 1) src[si++] = *p++;
+        src[si] = '\0';
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && di < sizeof(dst) - 1) dst[di++] = *p++;
+        dst[di] = '\0';
+        static char cp_buf[4096];
+        int r = vfs_read(src, cp_buf, sizeof(cp_buf));
+        uint32_t pos = 0;
+        if (r < 0) {
+            kprint("cp: origen no encontrado\n");
+            fb_puts(out_buf, max_out, &pos, "cp: archivo origen no encontrado");
+        } else if (vfs_write(dst, cp_buf, (uint32_t)r) >= 0) {
+            kprint("cp: copiado '"); kprint(src); kprint("' a '"); kprint(dst); kprint("'\n");
+            fb_puts(out_buf, max_out, &pos, "cp: copiado con exito");
+        } else {
+            kprint("cp: error al escribir destino\n");
+            fb_puts(out_buf, max_out, &pos, "cp: error al escribir destino");
+        }
+        return 1;
+    }
+
+    if (cmd_line[0] == 'm' && cmd_line[1] == 'v' && cmd_line[2] == ' ') {
+        const char *p = cmd_line + 3;
+        while (*p == ' ') p++;
+        char src[48], dst[48];
+        uint32_t si = 0, di = 0;
+        while (*p && *p != ' ' && si < sizeof(src) - 1) src[si++] = *p++;
+        src[si] = '\0';
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && di < sizeof(dst) - 1) dst[di++] = *p++;
+        dst[di] = '\0';
+        static char mv_buf[4096];
+        int r = vfs_read(src, mv_buf, sizeof(mv_buf));
+        uint32_t pos = 0;
+        if (r < 0) {
+            kprint("mv: origen no encontrado\n");
+            fb_puts(out_buf, max_out, &pos, "mv: origen no encontrado");
+        } else if (vfs_write(dst, mv_buf, (uint32_t)r) >= 0) {
+            vfs_delete(src);
+            kprint("mv: movido '"); kprint(src); kprint("' a '"); kprint(dst); kprint("'\n");
+            fb_puts(out_buf, max_out, &pos, "mv: movido con exito");
+        } else {
+            kprint("mv: error al mover\n");
+            fb_puts(out_buf, max_out, &pos, "mv: error al mover");
+        }
+        return 1;
+    }
+
+    if (cmd_line[0] == 't' && cmd_line[1] == 'o' && cmd_line[2] == 'u' && cmd_line[3] == 'c' && cmd_line[4] == 'h' && cmd_line[5] == ' ') {
+        const char *p = cmd_line + 6;
+        while (*p == ' ') p++;
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        char tmp[8];
+        uint32_t pos = 0;
+        if (vfs_read(fn, tmp, sizeof(tmp)) < 0) {
+            vfs_write(fn, "", 0);
+            kprint("touch: creado '"); kprint(fn); kprint("'\n");
+            fb_puts(out_buf, max_out, &pos, "touch: archivo creado");
+        } else {
+            kprint("touch: ya existe\n");
+            fb_puts(out_buf, max_out, &pos, "touch: el archivo ya existia");
+        }
+        return 1;
+    }
+
+    if (cmd_line[0] == 'h' && cmd_line[1] == 'e' && cmd_line[2] == 'a' && cmd_line[3] == 'd' && cmd_line[4] == ' ') {
+        const char *p = cmd_line + 5;
+        while (*p == ' ') p++;
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        while (*p == ' ') p++;
+        uint32_t lines = 10;
+        if (*p >= '0' && *p <= '9') {
+            lines = 0;
+            while (*p >= '0' && *p <= '9') lines = lines * 10 + (*p++ - '0');
+        }
+        static char hbuf[4096];
+        int r = vfs_read(fn, hbuf, sizeof(hbuf));
+        uint32_t pos = 0;
+        if (r < 0) { fb_puts(out_buf, max_out, &pos, "head: archivo no encontrado"); return 1; }
+        uint32_t lcount = 0;
+        kprint("\n");
+        for (int i = 0; i < r && lcount < lines; ++i) {
+            kputc(hbuf[i]);
+            if (pos < max_out - 1) out_buf[pos++] = hbuf[i];
+            if (hbuf[i] == '\n') lcount++;
+        }
+        out_buf[pos] = '\0';
+        kprint("\n");
+        return 1;
+    }
+
+    if (cmd_line[0] == 't' && cmd_line[1] == 'a' && cmd_line[2] == 'i' && cmd_line[3] == 'l' && cmd_line[4] == ' ') {
+        const char *p = cmd_line + 5;
+        while (*p == ' ') p++;
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        while (*p == ' ') p++;
+        uint32_t lines = 10;
+        if (*p >= '0' && *p <= '9') {
+            lines = 0;
+            while (*p >= '0' && *p <= '9') lines = lines * 10 + (*p++ - '0');
+        }
+        static char tbuf[4096];
+        int r = vfs_read(fn, tbuf, sizeof(tbuf));
+        uint32_t pos = 0;
+        if (r < 0) { fb_puts(out_buf, max_out, &pos, "tail: archivo no encontrado"); return 1; }
+        uint32_t total_l = 0;
+        for (int i = 0; i < r; ++i) if (tbuf[i] == '\n') total_l++;
+        uint32_t skip_l = (total_l > lines) ? (total_l - lines) : 0;
+        uint32_t cur_l = 0, start_idx = 0;
+        while (start_idx < (uint32_t)r && cur_l < skip_l) {
+            if (tbuf[start_idx++] == '\n') cur_l++;
+        }
+        kprint("\n");
+        for (uint32_t i = start_idx; i < (uint32_t)r; ++i) {
+            kputc(tbuf[i]);
+            if (pos < max_out - 1) out_buf[pos++] = tbuf[i];
+        }
+        out_buf[pos] = '\0';
+        kprint("\n");
+        return 1;
+    }
+
+    if (cmd_line[0] == 'w' && cmd_line[1] == 'c' && cmd_line[2] == ' ') {
+        const char *p = cmd_line + 3;
+        while (*p == ' ') p++;
+        char fn[48]; uint32_t fi = 0;
+        while (*p && *p != ' ' && fi < sizeof(fn) - 1) fn[fi++] = *p++;
+        fn[fi] = '\0';
+        static char wcbuf[4096];
+        int r = vfs_read(fn, wcbuf, sizeof(wcbuf));
+        uint32_t pos = 0;
+        if (r < 0) { fb_puts(out_buf, max_out, &pos, "wc: archivo no encontrado"); return 1; }
+        uint32_t l = 0, w = 0;
+        int in_word = 0;
+        for (int i = 0; i < r; ++i) {
+            if (wcbuf[i] == '\n') l++;
+            if (wcbuf[i] == ' ' || wcbuf[i] == '\t' || wcbuf[i] == '\n' || wcbuf[i] == '\r') in_word = 0;
+            else if (!in_word) { in_word = 1; w++; }
+        }
+        kprint("  "); kprint_dec(l); kprint(" lineas  ");
+        kprint_dec(w); kprint(" palabras  ");
+        kprint_dec((uint32_t)r); kprint(" bytes  "); kprint(fn); kprint("\n");
+        fb_put_dec(out_buf, max_out, &pos, l); fb_puts(out_buf, max_out, &pos, " lineas, ");
+        fb_put_dec(out_buf, max_out, &pos, w); fb_puts(out_buf, max_out, &pos, " palabras, ");
+        fb_put_dec(out_buf, max_out, &pos, (uint32_t)r); fb_puts(out_buf, max_out, &pos, " bytes");
+        return 1;
+    }
+
+if ((cmd_line[0] == 's' && cmd_line[1] == 'p' && cmd_line[2] == 'a' && cmd_line[3] == 'w' && cmd_line[4] == 'n' && cmd_line[5] == ' ') ||
+        (cmd_line[0] == 'b' && cmd_line[1] == 'g' && cmd_line[2] == ' ')) {
+        const char *subcmd = (cmd_line[0] == 's') ? (cmd_line + 6) : (cmd_line + 3);
+        while (*subcmd == ' ') subcmd++;
+        if (*subcmd == '\0') {
+            kprint("Uso: spawn <comando>  (alias: bg <comando>)\n");
+            uint32_t p = 0;
+            fb_puts(out_buf, max_out, &p, "Uso: spawn <comando>");
+            return 1;
+        }
+
+        if ((subcmd[0] == 's' && subcmd[1] == 'p' && subcmd[2] == 'a' && subcmd[3] == 'w' && subcmd[4] == 'n' && subcmd[5] == ' ') ||
+            (subcmd[0] == 'b' && subcmd[1] == 'g' && subcmd[2] == ' ')) {
+            kprint("Error: No se permite 'spawn' anidado.\n");
+            uint32_t p = 0;
+            fb_puts(out_buf, max_out, &p, "Error: spawn anidado no permitido.");
+            return 1;
+        }
+
+        char th_name[32];
+        th_name[0] = 'b'; th_name[1] = 'g'; th_name[2] = '_';
+        uint32_t ni = 3;
+        for (uint32_t i = 0; subcmd[i] && subcmd[i] != ' ' && ni < sizeof(th_name) - 1; ++i) {
+            th_name[ni++] = subcmd[i];
+        }
+        th_name[ni] = '\0';
+
+        struct bg_job *job = (struct bg_job *)kmalloc(sizeof(struct bg_job));
+        if (!job) {
+            kprint("Error: Sin memoria para nuevo trabajo.\n");
+            uint32_t p = 0;
+            fb_puts(out_buf, max_out, &p, "Error: sin memoria para spawn.");
+            return 1;
+        }
+
+        uint32_t ci = 0;
+        while (subcmd[ci] && ci < sizeof(job->cmd) - 1) {
+            job->cmd[ci] = subcmd[ci];
+            ci++;
+        }
+        job->cmd[ci] = '\0';
+
+        struct tcb *new_t = thread_create(th_name, spawn_job_worker, job);
+        if (!new_t) {
+            kprint("Error: No se pudo instanciar el hilo.\n");
+            kfree(job);
+            uint32_t p = 0;
+            fb_puts(out_buf, max_out, &p, "Error: fallo al crear hilo.");
+            return 1;
+        }
+
+        job->tid = new_t->tid;
+
+        uint32_t li = 0;
+        const char *pfx = "/tmp/job_";
+        while (*pfx) job->log_file[li++] = *pfx++;
+        char tbuf[10]; int tn = 0; uint32_t tid_tmp = job->tid;
+        if (tid_tmp == 0) tbuf[tn++] = '0';
+        else { while (tid_tmp) { tbuf[tn++] = (char)('0' + (tid_tmp % 10)); tid_tmp /= 10; } }
+        while (tn > 0) job->log_file[li++] = tbuf[--tn];
+        const char *sfx = ".log";
+        while (*sfx) job->log_file[li++] = *sfx++;
+        job->log_file[li] = '\0';
+
+        kprint("[SPAWN] Tarea '"); kprint(job->cmd);
+        kprint("' lanzada en segundo plano [TID ");
+        kprint_dec(job->tid);
+        kprint(", Hilo '"); kprint(th_name);
+        kprint("'] -> Log: "); kprint(job->log_file); kprint("\n");
+
+        uint32_t pos = 0;
+        fb_puts(out_buf, max_out, &pos, "[SPAWN OK] TID=");
+        fb_put_dec(out_buf, max_out, &pos, job->tid);
+        fb_puts(out_buf, max_out, &pos, " Log=");
+        fb_puts(out_buf, max_out, &pos, job->log_file);
+        return 1;
+    }
+
+    if (cmd_line[0] == 'k' && cmd_line[1] == 'i' && cmd_line[2] == 'l' && cmd_line[3] == 'l' && cmd_line[4] == ' ') {
+        const char *p = cmd_line + 5;
+        while (*p == ' ') p++;
+        uint32_t target_tid = 0;
+        while (*p >= '0' && *p <= '9') {
+            target_tid = target_tid * 10 + (*p++ - '0');
+        }
+        if (thread_kill(target_tid)) {
+            kprint("KTHREAD: Hilo TID ");
+            kprint_dec(target_tid);
+            kprint(" terminado con exito.\n");
+            uint32_t pos = 0;
+            fb_puts(out_buf, max_out, &pos, "Hilo terminado con exito.");
+        } else {
+            kprint("KTHREAD: Error al terminar TID ");
+            kprint_dec(target_tid);
+            kprint(" (no existe o es hilo del sistema 0..3).\n");
+            uint32_t pos = 0;
+            fb_puts(out_buf, max_out, &pos, "Error: TID invalido o hilo protegido.");
+        }
+        return 1;
+    }
+
     if (cmd_line[0] == 'c' && cmd_line[1] == 'r' && cmd_line[2] == 'e' && cmd_line[3] == 'a' && cmd_line[4] == 'd' && cmd_line[5] == 'o' && cmd_line[6] == 'r') {
-        kprint("MYOS - Creado por Marcos\n");
+        kprint("SOMA (Sistema Operativo Multi-Agente) - Creado por Marcos\n");
         uint32_t p = 0;
         fb_puts(out_buf, max_out, &p, "MYOS - Creado por Marcos");
         return 1;
@@ -481,8 +1418,8 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
         uint32_t ms = 0;
         while (*arg >= '0' && *arg <= '9') { ms = ms * 10 + (*arg++ - '0'); }
         if (ms == 0) ms = 1000;
-        kprint("Durmiendo "); kprint_dec(ms); kprint(" ms con HLT...\n");
-        timer_sleep_ms(ms);
+        kprint("Durmiendo "); kprint_dec(ms); kprint(" ms (cooperativo)...\n");
+        thread_sleep(ms);
         kprint("Despierto.\n");
         uint32_t p = 0;
         fb_puts(out_buf, max_out, &p, "Sleep completado.");
@@ -725,9 +1662,9 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
     } else if (cmd_line[0] == 's' && cmd_line[1] == 'e' && cmd_line[2] == 'c' && cmd_line[3] == 't' && cmd_line[4] == 'o' && cmd_line[5] == 'r' && cmd_line[6] == '_' && cmd_line[7] == 'w') {
         const char *p = cmd_line + 12;
         uint64_t sec = parse_num(&p);
-        if (sec < SECTOR_USER_MIN) {
+        if (sec < SECTOR_USER_MIN || (sec >= 4095 && sec <= 4400)) {
             kprint("Error: sectores 0-2047 reservados al sistema y RamFS persistente.\n");
-            const char *err = "Error: sector protegido (LBA < 2048 reservado). Usa LBA >= 2048.";
+            const char *err = "Error: sector protegido (LBA < 2056 o 4095-4400 reservados). Usa LBA >= 2056.";
             uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
             return 1;
         }
@@ -747,6 +1684,26 @@ static int dispatch_command(const char *cmd_line, char *out_buf, uint32_t max_ou
         } else {
             const char *err = "Error de I/O al escribir en disco duro.";
             uint32_t i = 0; while (err[i] && i < max_out - 1) { out_buf[i] = err[i]; i++; } out_buf[i] = '\0';
+        }
+        return 1;
+    } else if ((cmd_line[0] == 'f' && cmd_line[1] == 's' && cmd_line[2] == '-' && cmd_line[3] == 'b' && cmd_line[4] == 'a' && cmd_line[5] == 'c' && cmd_line[6] == 'k' && cmd_line[7] == 'u' && cmd_line[8] == 'p') ||
+               (cmd_line[0] == 'c' && cmd_line[1] == 'h' && cmd_line[2] == 'e' && cmd_line[3] == 'c' && cmd_line[4] == 'k' && cmd_line[5] == 'p' && cmd_line[6] == 'o' && cmd_line[7] == 'i' && cmd_line[8] == 'n' && cmd_line[9] == 't')) {
+        if (vfs_checkpoint_save() == 0) {
+            kprint("[CHECKPOINT] Estado de RamFS y memoria persistido en virtio-blk (LBA 4096).\n");
+            uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Checkpoint guardado con exito.");
+        } else {
+            kprint("[CHECKPOINT ERROR] Fallo de I/O al guardar checkpoint en disco.\n");
+            uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Error al guardar checkpoint.");
+        }
+        return 1;
+    } else if ((cmd_line[0] == 'f' && cmd_line[1] == 's' && cmd_line[2] == '-' && cmd_line[3] == 'r' && cmd_line[4] == 'e' && cmd_line[5] == 's' && cmd_line[6] == 't' && cmd_line[7] == 'o' && cmd_line[8] == 'r' && cmd_line[9] == 'e') ||
+               (cmd_line[0] == 'r' && cmd_line[1] == 'o' && cmd_line[2] == 'l' && cmd_line[3] == 'l' && cmd_line[4] == 'b' && cmd_line[5] == 'a' && cmd_line[6] == 'c' && cmd_line[7] == 'k')) {
+        if (vfs_checkpoint_restore() == 0) {
+            kprint("[ROLLBACK] RamFS restaurado con exito desde el checkpoint de hardware (LBA 4096).\n");
+            uint32_t p = 0; fb_puts(out_buf, max_out, &p, "RamFS restaurado desde checkpoint.");
+        } else {
+            kprint("[ROLLBACK ERROR] No existe un checkpoint valido en LBA 4096 o fallo de I/O.\n");
+            uint32_t p = 0; fb_puts(out_buf, max_out, &p, "Error: checkpoint no encontrado.");
         }
         return 1;
     } else if (cmd_line[0] == 'f' && cmd_line[1] == 's' && cmd_line[2] == '-' && cmd_line[3] == 's' && cmd_line[4] == 'y' && cmd_line[5] == 'n' && cmd_line[6] == 'c') {
@@ -785,12 +1742,35 @@ static int is_valid_tool(const char *s)
 
     /* Rechazar unicamente marcadores de plantilla '<...>' */
     for (const char *chk = s; *chk && *chk != '\n' && *chk != '\r'; chk++) {
-        if (*chk == '<' || *chk == '>') return 0;
+        if (*chk == '<') return 0; /* Rechaza marcadores como <archivo>, pero permite '>' para redireccion */
     }
 
     return 1;
 }
 
+
+static int is_patch_target_protected(const char *name)
+{
+    static const char *const protected_list[] = {
+        "boot.s", "idt.c", "idt.h", "io.h", "srcfs.c", "srcfs.h",
+        "virtio_blk.c", "virtio_blk.h", "boot_gate.c", "boot_gate.h",
+        "pmm.c", "pmm.h", "vmm.c", "vmm.h", "mem.c", "mem.h",
+        "thread.c", "thread.h", "switch.s", "mutex.c", "mutex.h", 0
+    };
+    while (*name == ' ' || *name == '\t') name++;
+    if (name[0] == '/') name++;
+    if (name[0] == 's' && name[1] == 'r' && name[2] == 'c' && name[3] == '/') name += 4;
+
+    for (int i = 0; protected_list[i]; ++i) {
+        const char *a = name;
+        const char *b = protected_list[i];
+        while (*a && *b && (*a == *b)) { a++; b++; }
+        if (*b == '\0' && (*a == '\0' || *a == ' ' || *a == '\n' || *a == '\r' || *a == '"')) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* ---- Puente host (PATCHv02) --------------------------------------
  * Buzon en LBA 1..16 (8 KiB):
@@ -1037,11 +2017,10 @@ static int json_get2(const char *json, const char *k1, const char *k2, char *out
 /* Anade "- Paso N: <msg>" al historial para que el modelo no repita el fallo. */
 static void history_add_note(uint32_t *hist_len, int step, const char *msg)
 {
-    uint32_t pos = *hist_len;
-
-    if (pos + 400 > sizeof(history_buf)) {
+    if (!hist_len || *hist_len >= sizeof(history_buf) - 400) {
         return;
     }
+    uint32_t pos = *hist_len;
 
     fb_puts(history_buf, sizeof(history_buf), &pos, "- Paso ");
     fb_putc(history_buf, sizeof(history_buf), &pos, (char)('0' + step));
@@ -1096,17 +2075,14 @@ static void shell_run(void)
     char cmd[512];
     char reply[4096];
 
-    serial_print("\n============================================================\n");
-    serial_print("MYOS 0.1 INTERACTIVE SHELL\n");
-    serial_print("Escribe 'help' para ver comandos disponibles.\n");
-    serial_print("============================================================\n\n");
+    /* Banner unificado en show_somafetch */
 
     for (;;) {
         int len;
 
         if (agent_resume_pending == 1) {
             /* Reanudar la mision tras un reinicio por parche. */
-            const char *pre = "myos ";
+            const char *pre = "soma ";
             uint32_t ci = 0;
             while (*pre) cmd[ci++] = *pre++;
             for (uint32_t k = 0; agent_resume_mission[k] && ci < sizeof(cmd) - 1; ++k) {
@@ -1114,11 +2090,11 @@ static void shell_run(void)
             }
             cmd[ci] = '\0';
             len = (int)ci;
-            serial_print("myos> ");
+            serial_print("\033[1;36msoma\033[1;32m>\033[0m ");
             serial_print(cmd);
             serial_print("   [reanudacion automatica tras el reinicio]\n");
         } else {
-            serial_print("myos> ");
+            serial_print("\033[1;36msoma\033[1;32m>\033[0m ");
             len = kgetline(cmd, sizeof(cmd));
         }
         if (len == 0) {
@@ -1143,11 +2119,30 @@ static void shell_run(void)
 
         if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p' && (cmd[4] == '\0' || cmd[4] == ' ')) {
             serial_print("Comandos disponibles:\n");
-            serial_print("  help                 - Muestra esta ayuda\n");
+            serial_print("  help                 - Muestra esta ayuda\n  somafetch / neofetch - Ficha del sistema y telemetria en arte ASCII\n");
             serial_print("  creador              - Muestra informacion del creador de MYOS\n");
             serial_print("  test_suite           - Ejecuta la suite de auto-test y no-regresion\n");
             serial_print("  threads              - Estado de los hilos de kernel (Kthreads) y auto-test\n");
             serial_print("  ps                   - Lista de procesos y demonios activos con ticks CPU\n");
+            serial_print("  spawn <cmd> / bg     - Lanza un comando como hilo en segundo plano\n");
+            serial_print("  kill <tid>           - Termina un hilo en segundo plano (TID > 3)\n");
+            serial_print("  date                 - Muestra la fecha y hora real (CMOS RTC)\n");
+            serial_print("  time <cmd>           - Mide el tiempo y ciclos de CPU de un comando\n");
+            serial_print("  free                 - Informacion de RAM fisica y KHeap\n");
+            serial_print("  df                   - Informacion de almacenamiento y RamFS\n");
+            serial_print("  tree                 - Muestra el arbol de directorios de RamFS\n");
+            serial_print("  cp <orig> <dest>     - Copia un archivo en RamFS\n");
+            serial_print("  mv <orig> <dest>     - Mueve o renombra un archivo en RamFS\n");
+            serial_print("  touch <archivo>      - Crea un archivo vacio\n");
+            serial_print("  head <arch> [lineas] - Muestra las primeras N lineas\n");
+            serial_print("  tail <arch> [lineas] - Muestra las ultimas N lineas\n");
+            serial_print("  wc <archivo>         - Cuenta lineas, palabras y bytes\n");
+            serial_print("  echo <txt> [> f]     - Imprime texto o lo redirige a un archivo\n");
+            serial_print("  <cmd> > <archivo>    - Redirige la salida de cualquier comando\n");
+            serial_print("  hexdump <f> [bytes]  - Volcado hexadecimal y ASCII (alias: xxd)\n");
+            serial_print("  reboot               - Reinicia la máquina físicamente (8042 reset)\n");
+            serial_print("  poweroff             - Apaga el sistema limpiamente (ACPI)\n");
+            serial_print("  halt                 - Sincroniza discos y detiene la CPU (HLT)\n");
             serial_print("  uptime               - Tiempo de ejecucion del kernel\n");
             serial_print("  sleep <ms>           - Suspende la CPU con HLT durante N milisegundos\n");
             serial_print("  dns <dominio>        - Consulta de registro A en servidor DNS\n");
@@ -1155,12 +2150,14 @@ static void shell_run(void)
             serial_print("  health               - Verifica estado del servidor LLM\n");
             serial_print("  llm <mensaje>        - Consulta general a nail-35b\n");
             serial_print("  llm-diag [pregunta]  - Telemetria + Diagnostico del kernel por IA\n");
-            serial_print("  myos <mision>        - Agente autonomo IA (alias: agent)\n");
+            serial_print("  soma <mision>        - Agente autonomo IA (alias: myos, agent)\n");
             serial_print("  heap                 - Estado de la memoria dinamica kmalloc\n");
             serial_print("  ping <ip>            - Envia ICMP echo a una direccion IPv4\n");
             serial_print("  ls                   - Lista los archivos del RamFS\n");
             serial_print("  cat <archivo>        - Muestra el contenido de un archivo\n");
             serial_print("  write <arch> <texto> - Crea o sobrescribe un archivo\n");
+            serial_print("  checkpoint           - Guarda snapshot fisico de RamFS en virtio-blk (alias: fs-backup)\n");
+            serial_print("  rollback             - Restaura RamFS desde el ultimo checkpoint (alias: fs-restore)\n");
             serial_print("  fs-sync              - Fuerza sincronizacion de RamFS a virtio-blk\n");
             serial_print("  fs-format            - Restaura RamFS al estado inicial de fabrica\n");
             serial_print("  rm <archivo>         - Elimina un archivo\n");
@@ -1189,9 +2186,10 @@ static void shell_run(void)
             } else {
                 serial_print("Error al solicitar diagnostico al LLM.\n");
             }
-} else if ((cmd[0] == 'm' && cmd[1] == 'y' && cmd[2] == 'o' && cmd[3] == 's' && cmd[4] == ' ') ||
+} else if ((cmd[0] == 's' && cmd[1] == 'o' && cmd[2] == 'm' && cmd[3] == 'a' && cmd[4] == ' ') ||
+               (cmd[0] == 'm' && cmd[1] == 'y' && cmd[2] == 'o' && cmd[3] == 's' && cmd[4] == ' ') ||
                (cmd[0] == 'a' && cmd[1] == 'g' && cmd[2] == 'e' && cmd[3] == 'n' && cmd[4] == 't' && cmd[5] == ' ')) {
-            const char *mission = (cmd[0] == 'm') ? (cmd + 5) : (cmd + 6);
+            const char *mission = (cmd[0] == 'a') ? (cmd + 6) : (cmd + 5);
             while (*mission == ' ') mission++;
             if (*mission == '\0') {
                 serial_print("Uso: myos <mision en lenguaje natural>\n");
@@ -1218,7 +2216,7 @@ static void shell_run(void)
                 ap_len = 0;
                 const char *p_m = "MISION: '"; while (*p_m) agent_prompt_buf[ap_len++] = *p_m++;
                 const char *p_mval = mission; while (*p_mval && ap_len < sizeof(agent_prompt_buf) - 1200) agent_prompt_buf[ap_len++] = *p_mval++;
-                const char *p_ctx = "'.\nContexto MYOS: Kernel bare-metal x86_64. Red: IP local 10.0.2.15, Gateway 10.0.2.2. RamFS en /.\n"
+                const char *p_ctx = "'.\nContexto SOMA: Sistema Operativo Multi-Agente (kernel bare-metal x86_64). Red: IP local 10.0.2.15, Gateway 10.0.2.2. RamFS en /.\n"
                                     "Responde SIEMPRE con un objeto JSON valido con este esquema exacto:\n"
                                     "{\n"
                                     "  \"thought\": \"analisis breve de la accion a tomar\",\n"
@@ -1228,19 +2226,21 @@ static void shell_run(void)
                                     "  \"verdict\": \"resumen completo y detallado para el usuario si action==final\"\n"
                                     "}\n"
                                     "Herramientas validas:\n"
-                                    "- Diagnostico/Sistema: stats | mem | arp | pci | ping 10.0.2.2 | uptime | sleep MS | test_suite\n"
+                                    "- Diagnostico/Sistema: stats | mem | free (RAM libre/usada) | df (disco) | date (reloj real RTC) | time CMD | hexdump /arch | ps | spawn CMD | kill TID | reboot | poweroff | halt | arp | pci | ping 10.0.2.2 | uptime | sleep MS | test_suite\n"
                                     "- Red/Internet: dns DOMINIO | curl HOST [PUERTO] [RUTA]\n"
-                                    "- Archivos/Memoria: ls | cat /archivo | write /archivo texto | rm /archivo\n"
+                                    "- Archivos/Memoria: ls | tree (arbol) | cat /arch | grep PATRON /arch | head /arch N | tail /arch N | wc /arch | cp /orig /dest | mv /orig /dest | touch /arch | write /arch texto | echo texto [> /arch] | CMD > /arch (redireccion universal) | rm /arch | fs-sync | fs-format\n"
                                     "- Disco/Sectores: sector_read LBA | sector_write LBA texto\n"
                                     "- Codigo Fuente: src_ls | src_cat archivo.c OFFSET | src_grep archivo.c texto\n"
                                     "Reglas de oro:\n"
                                     "1) Si la mision pide varias tareas (ej: resolver DNS y hacer curl), ejecuta UNA herramienta por paso hasta completar TODAS.\n"
                                     "2) Para verificar el estado general del kernel ejecuta 'test_suite'.\n"
                                     "3) En 'verdict' explica con claridad y detalle todo lo realizado. NUNCA uses respuestas vacias ni '...'.\n"
-                                    "4) Para modificar el codigo: localiza con src_grep, lee con src_cat y copia el SEARCH EXACTO (debe aparecer una sola vez). Con action==patch el kernel se reiniciara y recibiras el resultado del host.\n"
+                                    "4) Modificacion de codigo: Los subsistemas del core (boot, idt, pmm, vmm, mem, thread, mutex, virtio_blk, boot_gate) estan PROTEGIDOS. Solo puedes modificar archivos como kernel.c, console.c, fs.c, etc. El bloque SEARCH debe ser conciso y exacto (max 120 lineas). Con action==patch el kernel se reiniciara y validara el parche.\n"
                                     "5) Si el historial indica que tu parche fue aprobado (BOOT_OK), NO envies mas parches: comprueba el archivo y concluye con action=\"final\".\n"
                                     "6) AUTO-EVOLUCION Y MEMORIA: Si creas o modificas una herramienta o comando, anota SIEMPRE con 'write' en /etc/mem_kernel.txt el nombre del comando y que hace para recordarlo en futuras misiones.\n"
-                                    "7) PERSISTENCIA OBLIGATORIA: Si la mision pide guardar, registrar, volcar o escribir datos en un archivo, es ESTRICTAMENTE OBLIGATORIO ejecutar 'write /archivo texto' ANTES de emitir action=\"final\". Queda terminantemente prohibido concluir alegando que se guardo mentalmente o que el analisis es suficiente.\n";
+                                    "7) PERSISTENCIA: Si la mision pide guardar datos, debes asegurarte de que se escriban en disco con 'write /archivo texto', 'echo texto > /archivo' o 'CMD > /archivo'. Si ya ejecutaste con exito una redireccion '>' o un 'write', el archivo YA esta persistido en disco y puedes concluir directamente con action=\"final\".\n"
+                                    "8) TAREAS EN SEGUNDO PLANO: Para tareas demoradas puedes usar 'spawn <cmd>' (ej: 'spawn ping 10.0.2.2' o 'spawn sleep 3000'), monitorearlas con 'ps' y leer su resultado en '/tmp/job_<TID>.log'.\n"
+                                    "9) LECTURA EFICIENTE: Si la mision pide ver el inicio o final de un archivo grande o un log, usa 'head /archivo N' o 'tail /archivo N' en vez de volcar todo con 'cat'. Para explorar la jerarquia usa 'tree'.\n";
                 while (*p_ctx) agent_prompt_buf[ap_len++] = *p_ctx++;
 
                 /* Inyectar recuerdos persistentes aprendidos previamente */
@@ -1265,7 +2265,7 @@ static void shell_run(void)
                 }
 
                 static char act[32];
-                static char th[512];
+                static char th[1024];
                 static char cmd_field[512];
                 static char patch_field[4096];
                 static char verdict[4096];
@@ -1321,6 +2321,15 @@ static void shell_run(void)
                     const char *ptext = patch_field[0] ? patch_field : agent_reply_buf;
                     const char *pfile = find_substr(ptext, "FILE: src/");
                     if (pfile) {
+                        const char *target_fname = pfile + 10;
+                        if (is_patch_target_protected(target_fname)) {
+                            serial_print("\n[SEGURIDAD KERNEL] Modificacion denegada: Archivo del core protegido.\n");
+                            history_add_note(&hist_len, step,
+                                "tu parche fue rechazado por seguridad: los subsistemas del core "
+                                "(boot, idt, pmm, vmm, mem, thread, mutex, virtio_blk, boot_gate) estan PROTEGIDOS. "
+                                "Solo puedes modificar utilidades de aplicacion (ej: kernel.c, console.c, fs.c, etc.).");
+                            continue;
+                        }
                         serial_print("\n[AGENTE AUTONOMO]: Parche estructurado emitido. Enviando al host...\n");
                         if (agent_patch_attempts >= AGENT_MAX_PATCHES) {
                             serial_print("\n[AGENTE AUTONOMO]: limite de parches por mision alcanzado; no se envia.\n");
@@ -1351,6 +2360,7 @@ if (hist_len + 400 < sizeof(history_buf)) {
                         serial_print(clean_cmd);
                         serial_print("' en el hardware...\n\n");
 
+                        tool_feedback_buf[0] = '\0';
                         execute_tool_with_feedback(clean_cmd, tool_feedback_buf, sizeof(tool_feedback_buf));
 
                         serial_print("\n>> [FEEDBACK A LA IA]: ");
@@ -1378,8 +2388,30 @@ if (hist_len + 400 < sizeof(history_buf)) {
                     }
                 }
 
-                /* 3. Accion: Dictamen final o aviso de respuesta incompleta */
+                /* 3. Accion: Dictamen final con Guardia Cognitiva Anti-Alucinacion */
                 if (find_substr(act, "final") || verdict[0] != '\0') {
+                    /* Verificar si la mision pedia crear/guardar archivos y el agente intento fingir el guardado */
+                    int req_file = (find_substr(mission, "crea") != 0 ||
+                                    find_substr(mission, "guarda") != 0 ||
+                                    find_substr(mission, "escribe") != 0 ||
+                                    find_substr(mission, "archivo") != 0 ||
+                                    find_substr(mission, ".txt") != 0 ||
+                                    find_substr(mission, ".log") != 0);
+
+                    int file_saved = (find_substr(history_buf, "ejecutaste 'write ") != 0 ||
+                                      find_substr(history_buf, "ejecutaste 'echo ") != 0 ||
+                                      find_substr(history_buf, " > ") != 0);
+
+                    if (req_file && !file_saved && step < 7) {
+                        serial_print("\n>> [GUARDIA SOMA]: Bloqueada alucinacion de guardado mental.\n");
+                        serial_print(">> [SOMA KERNEL]: No has ejecutado la herramienta 'write' en el hardware.\n");
+                        history_add_note(&hist_len, step,
+                            "RECHAZADO: Declaraste haber completado la mision pero NO ejecutaste la herramienta 'write'. "
+                            "NO hagas guardados mentales. Genera OBLIGATORIAMENTE un JSON con action=\"tool\" y "
+                            "cmd=\"write /archivo contenido\" para persistirlo en disco.");
+                        continue;
+                    }
+
                     serial_print("\n[AGENTE DICTAMEN FINAL]:\n");
                     serial_print(verdict[0] ? verdict : agent_reply_buf);
                     serial_print("\n\n");
@@ -1420,9 +2452,10 @@ if (hist_len + 400 < sizeof(history_buf)) {
                 serial_print("Error al consultar el LLM.\n");
             }
         } else if (cmd[0] == 's' && cmd[1] == 't' && cmd[2] == 'a' && cmd[3] == 't' && cmd[4] == 'u' && cmd[5] == 's') {
-            serial_print("IP:  "); kprint_ip(net_ip);
-            serial_print("  GW: "); kprint_ip(net_gateway);
-            serial_print("  MAC: "); kprint_mac(net_mac);
+            serial_print("ARCH: "); serial_print(MYOS_ARCH_NAME);
+            serial_print(" (HAL v1) | IP: "); kprint_ip(net_ip);
+            serial_print(" | GW: "); kprint_ip(net_gateway);
+            serial_print(" | MAC: "); kprint_mac(net_mac);
             serial_print("\n");
         } else if (cmd[0] == 'h' && cmd[1] == 'p' && cmd[2] == 'a' && cmd[3] == 't' && cmd[4] == 'c' && cmd[5] == 'h') {
             hpatch_command(cmd + 6);
@@ -1476,28 +2509,20 @@ void kernel_main(void)
     virtio_blk_init();
     vfs_init();
 
-    net_run_llm_test();
-
+    /* Comprobacion ultrarrapida en modo Canary (<1s) antes de pruebas de red */
     boot_gate_check();
 
-    vga_print_at("MYOS 0.1", 5, 36);
-    vga_print_at("x86_64 kernel: LONG MODE OK", 7, 27);
-    vga_print_at("VirtIO-NET: OK  |  TCP/IP: OK  |  HTTP: OK", 9, 20);
-    vga_print_at("LLM Server: 192.168.1.200:8087 (nail-35b)", 11, 20);
+    net_run_llm_test();
 
-        if (llm_test_passed) {
-        vga_print_at("LLM Response: ", 14, 20);
-        vga_print_at(llm_last_reply, 14, 34);
-        vga_print_at(">> SYSTEM STATUS: AUTONOMOUS AI LINK ESTABLISHED <<", 17, 15);
-    } else {
-        vga_print_at("LLM Test: FAILED", 14, 32);
-    }
+    clear_screen();
 
-    serial_print("\nMYOS 0.1\n");
-    serial_print("x86_64 kernel: LONG MODE OK\n");
-    if (llm_test_passed) {
-        serial_print("SYSTEM STATUS: AUTONOMOUS AI LINK ESTABLISHED\n");
-    }
+    /* Portada visual estandar de SOMA (70 columnas sin overflow) */
+    static char dummy_fb[64];
+    show_somafetch(dummy_fb, sizeof(dummy_fb));
+
+    kprint("\033[1;36m----------------------------------------------------------------------\033[0m\n");
+    kprint(" \033[1;37mSOMA 0.2 :: Escribe '\033[1;32msoma <mision>\033[1;37m' para el Agente o '\033[1;33mhelp\033[1;37m'.\033[0m\n");
+    kprint("\033[1;36m----------------------------------------------------------------------\033[0m\n\n");
 
     agent_state_load();
 

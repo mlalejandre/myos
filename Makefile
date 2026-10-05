@@ -44,7 +44,7 @@ OBJS = \
 
 HEADERS = $(wildcard src/*.h)
 
-all: $(BUILD)/myos.iso
+all: $(BUILD)/soma.iso
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -58,24 +58,24 @@ $(BUILD)/switch.o: src/switch.s | $(BUILD)
 $(BUILD)/%.o: src/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/myos.elf: $(OBJS) linker.ld
+$(BUILD)/soma.elf: $(OBJS) linker.ld
 	$(LD) -T linker.ld -o $@ $(OBJS)
 
-$(BUILD)/isodir/boot/myos.elf: $(BUILD)/myos.elf grub/grub.cfg
+$(BUILD)/isodir/boot/soma.elf: $(BUILD)/soma.elf grub/grub.cfg
 	mkdir -p $(BUILD)/isodir/boot/grub
-	cp $(BUILD)/myos.elf \
-		$(BUILD)/isodir/boot/myos.elf
+	cp $(BUILD)/soma.elf \
+		$(BUILD)/isodir/boot/soma.elf
 	cp grub/grub.cfg \
 		$(BUILD)/isodir/boot/grub/grub.cfg
 
-$(BUILD)/myos.iso: $(BUILD)/isodir/boot/myos.elf
+$(BUILD)/soma.iso: $(BUILD)/isodir/boot/soma.elf
 	grub-mkrescue \
 		-o $@ \
 		$(BUILD)/isodir
 
 	grub-file \
 		--is-x86-multiboot \
-		$(BUILD)/myos.elf
+		$(BUILD)/soma.elf
 
 clean:
 	rm -rf $(BUILD)

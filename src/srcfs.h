@@ -5,17 +5,19 @@
 
 /*
  * Mapa del disco (sectores de 512 bytes):
- *   0 .. 1023   reservado al sistema (buzon LBA 1-16, resultado LBA 20-23,
- *               indice y fuentes SRCFS en LBA 256-1023)
- *   >= 1024     libre para el usuario / la IA (sector_write)
+ *   (ver el mapa unificado a continuacion)
  */
 /*
  * Mapa del disco (sectores de 512 bytes):
  *   0 .. 1023   sistema (buzon, resultado, gate canary, fuentes SRCFS)
  *   1024..2047  sistema de archivos persistente RamFS (MYOSFS01)
- *   >= 2048     libre para el usuario / la IA (sector_write)
+ *   2048..2055  scratch del sistema (test_suite / canary)
+ *   2056..4094  libre para el usuario / la IA (sector_write)
+ *   4095..4400  checkpoint del RamFS (protegido)
+ *   >= 4401     libre para el usuario / la IA (sector_write)
  */
-#define SECTOR_USER_MIN 2048
+/* LBA 2048..2055: scratch del sistema (test_suite y canary). */
+#define SECTOR_USER_MIN 2056
 
 /* Lista los fuentes empaquetados por el host en out. Devuelve n o -1. */
 int srcfs_ls(char *out, uint32_t max);

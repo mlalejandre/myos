@@ -1,12 +1,12 @@
 ================================================================================
-ESTADO DEL PROYECTO MYOS (Octubre 2026)
+ESTADO DEL PROYECTO SOMA (Octubre 2026)
 ================================================================================
 
-MYOS: Autonomous AI-Native x86_64 Operating System
+SOMA (Sistema Operativo Multi-Agente): AI-Native x86_64 Operating System
 Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
 
 ================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (13 / 13)
+BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (19 / 19)
 ================================================================================
 
 #   Hito                                Estado  Impacto en el Sistema
@@ -76,18 +76,60 @@ BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (13 / 13)
                                                 - Prueba de fuego superada: 'curl neverssl.com 80' -> auto-reintento tras timeout ->
                                                   análisis cognitivo de JavaScript -> síntesis -> persistencia física en '/neverssl.txt'.
 
+14  Control de Trabajos y Multitarea    ✅      - Control de procesos asíncrono con comandos 'spawn <cmd>' (alias 'bg <cmd>') y 'kill <tid>'.
+    Dinámica (Job Control)                      - Persistencia automática de salida en RamFS (/tmp/job_<tid>.log) y aviso en consola.
+                                                - Reposo cooperativo desacoplado ('thread_sleep') que mantiene la shell 100% reactiva.
+                                                - Blindaje de seguridad Ring 0: protección de demonios críticos del sistema (TID 0..3).
+                                                - Recolección limpia de pilas en VMM y marcos en PMM tras terminación o 'kill' de hilos.
+
+15  Coreutils Esenciales y Editor Nano  ✅      - Editor de texto visual 'nano <arch>' en modo texto 80x25 con guardado en disco (^S) y salida (^X).
+                                                - Controlador de teclado con soporte de combinaciones Ctrl y teclas de dirección.
+                                                - Suite de utilidades Unix/DOS: 'date' (reloj RTC CMOS), 'time' (benchmarks en ms y ciclos TSC),
+                                                  'free' (RAM/Heap), 'df' (disco/inodos), 'tree' (árbol ASCII RamFS), 'cp', 'mv', 'touch',
+                                                  'head', 'tail', 'wc' y buscador 'grep <patron> <archivo>'.
+                                                - Integración cognitiva total: el Agente IA comprende y opera cada herramienta de forma autónoma.
+
+
+16  Control de Energía, Redirección     ✅      - Motor Readline bare-metal en consola: Historial (16 slots con ↑/↓), edición en caliente
+    Universal y Terminal Avanzada                 (←/→, Home/End, inserción y backspace en medio) y autocompletado inteligente con TAB.
+                                                - Control de energía: 'reboot' (reset por 8042), 'poweroff' (apagado ACPI) y 'halt'.
+                                                - Redirección universal de E/S con operador '>' silenciando pantalla y persistiendo en RamFS.
+                                                - Comandos 'echo' y visualizador canónico 'hexdump <arch> [bytes]' (alias 'xxd').
+                                                - Integración cognitiva completa: el Agente IA domina 'hexdump', 'grep', 'echo' y '>' sin redundancias.
+
+17  Consolidación Arquitectónica,      ✅      - Rollback atómico en asignaciones multinivel de marcos PMM, VMM, KHeap y pilas.
+    Robustez y Sandboxing del Agente             - Concurrencia formal: Registro de mutexes y recuperación forzada de bloqueos huérfanos
+                                                  tras terminación abrupta o kill de hilos, evitando deadlocks permanentes.
+                                                - Diferenciación arquitectónica: Boot Gate ultra-rápido (<1s local y determinista)
+                                                  frente a Suite de Validación Integral de 9 Fases del Kernel ('test_suite').
+                                                - Límites de autoridad y Sandboxing en Ring 0: Intercepción inmediata de intentos de
+                                                  mutación sobre subsistemas protegidos sin apagar QEMU; presupuesto de mutación en host.
+                                                - Persistencia transaccional y reanudación atómica de misiones del agente vía LBA 25.
+
+18  Frontera Portable y Especificación ✅      - Definición de la Capa de Abstracción de Hardware (HAL en 'src/arch.h')
+    HAL Multi-Arquitectura (ARM64)                desacoplando el control de CPU, barreras, ciclo de reloj e interrupciones.
+                                                - Aislamiento formal: 80% del código de MYOS (TCP/IP, VFS RamFS, KHeap,
+                                                  KThreads, KMutex, Agente ReAct, HTTP) certificado 100% agnóstico a la arquitectura.
+                                                - Especificación de portabilidad en 'PORTABILITY.md' delimitando el subárbol
+                                                  ARMv8-A (arranque en EL1, UART PL011 MMIO, timer cntvct_el0 y VBAR_EL1).
+                                                - Blindaje de la frontera HAL en 'protected.txt' impidiendo mutaciones erráticas.
+
+19  Identidad SOMA, Guardia Cognitiva  ✅      - Rebranding integral a SOMA (Sistema Operativo Multi-Agente) en todos los niveles.
+    y Visualizador Neofetch Bare-Metal            - Motor de color ANSI bare-metal (VGA/Serial) y utilidad 'somafetch' alineada a 70 cols.
+                                                - Guardia Cognitiva Anti-Alucinación: Intercepta falsos guardados mentales del LLM y
+                                                  lo obliga a usar I/O real ('write') antes de dar por cumplidas misiones de persistencia.
+                                                - Limpieza física ('fs-format') con inyección directa de ceros en sectores virtio-blk.
+
 ================================================================================
 PRÓXIMOS PASOS (HOJA DE RUTA PARA LA SIGUIENTE SESIÓN)
 ================================================================================
 
-1. Fase 4 (Consolidación Multitarea Dinámica):
-   -------------------------------------------
-   - Comando 'spawn <cmd>' o 'bg <cmd>': Permitir que la shell interactiva y el
-     Agente IA lancen cualquier comando o tarea de diagnóstico como un hilo de
-     kernel (kthread) independiente en segundo plano.
-   - Supervisión dinámica en vivo mediante el comando 'ps' / 'threads'.
-
-2. Fase 5 (Hito Estratégico - Portabilidad Multi-Arquitectura ARM64):
+1. Ejecución del Puerto Bare-Metal ARM64 (QEMU virt & Raspberry Pi 4):
+   --------------------------------------------------------------------
+   - Incorporar toolchain cruzado 'gcc-aarch64-linux-gnu' en el Dockerfile.
+   - Implementar el subárbol src/arch/aarch64/ (boot.s, switch.s, timer cntvct_el0, UART PL011).
+   - Arrancar MYOS sobre 'qemu-system-aarch64 -machine virt -cpu cortex-a72' reutilizando
+     íntegramente toda la pila TCP/IP, RamFS, el asignador y el bucle ReAct del Agente.
    ------------------------------------------------------------------
    - Reestructurar el árbol de código:
        * src/arch/x86_64/ (boot.s, switch.s, idt.*, pmm/vmm específicos)

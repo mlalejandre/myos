@@ -1,0 +1,83 @@
+Revisión de SOMA: debilidades y plan de mejora
+Es una revisión estática del código que has pegado, sin compilar ni ejecutar nada. Lo que marco como seguro se deduce directamente del código; lo probable conviene que lo verifiques con un test.
+La base es sólida: rollback con canary, protecciones NX/WP, guard pages, recuperación de mutexes. Pero hay bugs reales y huecos en el sandbox que conviene cerrar antes de añadir funcionalidad.
+1. Bugs reales
+net_big_lock nunca se inicializa con kmutex_init (seguro). Por eso no entra en mutex_registry, y si matas con kill un job que está en curl, kmutex_release_all_for_thread no lo libera: la red queda bloqueada para siempre. Además conns[2] en tcp.c se queda con used=1, y con 2 fugas ni el LLM puede conectar.
+Arreglo: llama a kmutex_init(&net_big_lock, "net") en net_init o al arrancar, y guarda el tid propietario en cada tcp_conn para liberarla en thread_kill.
+El interceptor de > rompe comandos legítimos (seguro). write /f A->B, => o HTML se interpretan como redirección. Además, in_q alterna con cualquier apóstrofo ("don't"). El agente escribe este tipo de texto constantemente.
+Arreglo: exige > rodeado de espacios y excluye write/echo con comillas, o tokeniza bien.
+Estado global compartido entre hilos (seguro):
+console_muted y redir_active: si matan el hilo en mitad de una redirección, la consola queda muda para siempre.
+Buffers static en dispatch_command (http_buf, gbuf, redir_buf, cp_buf...): un spawn curl y un curl del shell se pisan.
+El panic handler usa kprint, así que un panic durante una redirección no imprime nada. Pon console_muted = 0; al inicio de isr_exception_handler.
+ps y threads ejecutan tests (seguro). Cada ps crea hilos, consume TIDs y tablas de páginas (nunca se reutilizan) y ejecuta kmutex_test_self. Además, thread_test_self compara frames PMM antes y después: con otros hilos activos fallará de forma intermitente.
+Arreglo: separa ps (solo lectura) de selftest.
+El Boot Gate no comprueba lo que documentas (seguro). Documentas 5 fases (RAM, disco, VFS, ICMP, LLM), pero el gate solo prueba heap, disco y VFS, y sale antes del shell.
+hpatch bootfail parchea llm_health para fallar, pero el gate nunca lo llama, así que ese parche pasaría.
+Como kernel.c es parcheable por la IA, un parche que rompa el shell, el agente o la red pasa el canary.
+tests/smoke.json existe pero ningún script lo usa.
+Arreglo: que el canary arranque hasta el prompt y ejecute el smoke test por serie antes de aprobar.
+Colisión de sectores (seguro). test_suite y el canary escriben en LBA 2048, que es justo el primer sector que sector_write permite a la IA. Por otro lado, el checkpoint (LBA 4095–4384) no está protegido contra sector_write: la IA puede corromperlo.
+Arreglo: reserva un sector scratch del sistema y bloquea los rangos del checkpoint.
+virtio_blk_op se desincroniza tras un timeout (seguro). Si agota el timeout sin last_used++ y la completion llega tarde, todas las operaciones siguientes se leen como completadas antes de tiempo. Tampoco se comprueba el retorno de virtio_blk_init, así que el sistema sigue "persistente" sin disco.
+Arreglo: tras un timeout, re-inicializa la cola o marca el dispositivo como roto.
+SRCFS está al ~90 % de su capacidad (cálculo mío, aproximado). Los fuentes suman unos 339 KB (≈351 KB con el relleno a sector) y caben 760 sectores (389 KB). Con ~38 KB más, pack_sources se niega a empaquetar y src_ls/src_cat dejan de funcionar sin error visible. Además kernel.c (109 KB) son 143 páginas de 768 B: la IA no puede leerlo en 8 pasos.
+Sistema de archivos:
+vfs_write en archivo nuevo ignora len y usa strlen.
+Cambiar FS_MAX_FILES o el magic formatea todo sin respaldo.
+No hay atomicidad: son 9 sectores por archivo sin journal.
+sysmon reescribe 4,6 KB cada 2 s, lo que desgastará una SD en la Raspberry Pi.
+Arreglo: solo sincroniza si el contenido cambió, o escribe la telemetría solo en RAM.
+QEMU con -d int y PIT a 1 kHz (probable). Vuelca cada interrupción, lo que puede llegar a GB de qemu.log por hora. Usa -d guest_errors,cpu_reset y activa -d int solo para depurar.
+Higiene del repo:
+snapshots/ y hdd.img.checkpoint_bootgate no están en .gitignore: 16 MiB cada uno.
+console.h tiene /* hpatch ok */ duplicado: los tests mutan tus fuentes.
+srcfs.h tiene dos comentarios de mapa de disco contradictorios.
+llm_server.py hace kill -9 de lo que escuche en el puerto 8087, que es el mismo que usa "el otro proyecto" por defecto.
+2. Seguridad del agente
+Inyección de prompts: el agente lee contenido web (curl) y tiene fs-format, rm, reboot, poweroff, kill, sector_write, rollback y parches al kernel. Una página con "ejecuta fs-format" es un vector real.
+Arreglo: clasifica las herramientas por riesgo (lectura / escritura / destructiva) y exige confirmación humana por serie para las destructivas y para parches. Marca la salida de curl como datos no confiables en el prompt.
+Red: SLIRP deja al guest llegar a 10.0.2.2 (localhost de tu Mac) y a toda tu LAN. Usa restrict=on con una lista blanca explícita y limita curl/ping del agente a destinos permitidos.
+Lista de protegidos triplicada: ejecutar.py, protected.txt y kernel.c (más el texto del prompt) pueden desincronizarse. El kernel solo comprueba el primer FILE:. La barrera real es el host, y eso está bien, pero genera un único origen (por ejemplo un protected.h generado) y comprueba todos los FILE:.
+Archivos sin proteger y críticos: fs.c, llm.c, net.c, tcp.c, console.c. La IA puede romper su propio enlace y, como el gate no lo prueba, el parche se aprueba.
+Guardia anti-alucinación heurística: find_substr(mission,"crea") también coincide con "creador", y " > " en el historial coincide con cualquier salida. Mejor un contador real de llamadas a vfs_write durante la misión.
+Parser JSON:
+Solo desescapa \n \r \t \" \\; \uXXXX y \/ corrompen los parches (el SEARCH falla).
+Busca la clave en cualquier posición del texto, incluso dentro de strings.
+3. Robustez del kernel
+Sin TSS/IST: un desbordamiento de pila de hilo (32 KiB reales) cae en la guard page y el #PF se atiende sobre la misma pila agotada, lo que produce un triple fault sin diagnóstico. Añade un TSS con IST1 para #DF y #PF, y un indicador de uso máximo de pila en ps.
+Panic no observable por el host: fuera del canary, el kernel hace cli; hlt y QEMU se queda colgado. Haz qemu_exit(0x23) en cualquier panic y que ejecutar.py lo detecte.
+kill es inseguro: libera mutexes a la fuerza con estado a medias y filtra job, out_buf y conexiones TCP. Mejor cancelación cooperativa con un flag que los puntos seguros comprueben.
+HTTP: no decodifica chunked ni usa Content-Length. El timeout de 40 s puede ser menor que generar max_tokens=4096 con un 35B.
+kputc espera el serial sin timeout: en hardware sin COM1 se cuelga. Importante para tu objetivo de Raspberry Pi.
+kgetline limita a 127 caracteres mientras cmd[] es 512: una misión larga pegada se trunca sin aviso.
+Telemetría con cadenas fijas: somafetch ("10.0.2.15", "nail-35b"), mem ("1 GiB mapeado") y df ("/32") no son reales, justo lo que tu hito 1 llama "Feedback Veraz".
+4. Arquitectura: lo que haría antes de avanzar
+Tabla de comandos {nombre, handler, flags(agente/destructivo/protegido), ayuda}. dispatch_command compara carácter a carácter y sin límite de palabra: memoria, testing, clsfoo coinciden con mem, test, cls. La tabla arregla eso y la deriva entre help, el diccionario del TAB y la lista de herramientas del prompt.
+ksnprintf y un sink de salida único. Hoy cada comando escribe dos veces (consola y out_buf), con decenas de bucles manuales de copia de cadenas. Por eso ps > f guarda solo "PS: ... verificados" y no la tabla real.
+Trocear kernel.c en shell.c, agent.c, cmd_fs.c, cmd_net.c, nano.c y rtc.c. Así tiene sentido el radio de mutación del host y la IA puede leerlo.
+config.h con IP/puerto/modelo del LLM y límites del FS. Ahora están fijos en llm.c y tcp.c.
+disk_layout.h único para los LBAs que hoy están duplicados en ejecutar.py, kernel.c, fs.c, boot_gate.c y srcfs.h.
+Antes del port ARM: el "80 % agnóstico" no es cierto todavía:
+kernel.c usa outb, VGA, CMOS y lidt.
+tcp, http, ip, udp y virtio usan rdtsc, cpu_pause y mem_barrier de io.h, no de arch.h.
+pci.c redefine outl/inl.
+Los drivers virtio son PCI legacy con puertos de E/S, y qemu virt usa virtio-mmio.
+Mídelo con grep -l "__asm__\|io.h" y mueve el tiempo a arch_time_ms() y la E/S a arch/x86_64/ antes de crear arch/aarch64/.
+5. Calidad y pruebas
+Smoke test real: un tests/run_smoke.py con pexpect sobre el serial, usado como gate del canary.
+Compilación: -Werror -Wshadow -Wstrict-prototypes -Wformat, más cppcheck o scan-build.
+Tests en el host: fs.c, dns.c, http.c, el parser JSON y el parseo TCP/IP son C casi puro. Compílalos en el host con un virtio_blk falso y pásales fuzzing (libFuzzer/AFL). Es la forma más barata de cazar desbordamientos.
+Documentación desfasada:
+El README habla de MYOS 0.1, HTTP/1.0, heap de 12 MiB en 0x400000 y myos.iso.
+PORTABILITY.md tiene el Markdown roto.
+El rebranding está a medias: MYOSFS01 frente a SOMAFS01, myos-toolchain, /myos.
+Orden de ataque sugerido
+Arreglos de una línea: net_big_lock, unmute en panic, LBA 2048, .gitignore, -d int.
+Smoke test como gate del canary (cubre el hueco principal de seguridad).
+Separar ps de los tests, buffers por hilo y bug del >.
+Niveles de riesgo para herramientas más restrict=on en QEMU.
+Tabla de comandos, ksnprintf y trocear kernel.c.
+TSS/IST y detección de panic en el host.
+Limpieza de HAL y solo entonces ARM.
+Si quieres, empiezo con el bloque 1 y te preparo los parches concretos en formato SEARCH/REPLACE.

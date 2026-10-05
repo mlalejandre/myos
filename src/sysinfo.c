@@ -180,7 +180,7 @@ int sysinfo_format_telemetry(char *out_buf, uint32_t max)
     sysinfo_get(&s);
 
     uint32_t pos = 0;
-    append_str(out_buf, max, &pos, "[TELEMETRIA KERNEL MYOS x86_64]\n");
+    append_str(out_buf, max, &pos, "[TELEMETRIA KERNEL SOMA (Multi-Agente) x86_64]\n");
     append_str(out_buf, max, &pos, "- CPU: 64-bit Long Mode | CR0=");
     append_hex(out_buf, max, &pos, s.cr0, 8);
     append_str(out_buf, max, &pos, " | CR4=");
