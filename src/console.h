@@ -22,4 +22,8 @@ extern volatile int console_muted;
 void keyboard_irq_handler(void);
 
 
+int  console_history_dump(char *out_buf, uint32_t max_out);
+void console_history_load_from_vfs(void);
+void console_history_sync_to_vfs(void);
+
 #endif

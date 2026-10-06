@@ -1,13 +1,26 @@
+#include "arch/aarch64/rpi_fb.h"
 volatile int console_muted = 0;
+#include "arch.h"
 #include "thread.h"
 #include "console.h"
+#include "shell.h"
 #include "io.h"
+#include "fs.h"
 
 #define COM1 0x3F8
 
+#ifdef __aarch64__
+#define PL011_UARTDR ((volatile uint32_t *)0x09000000)
+#define PL011_UARTFR ((volatile uint32_t *)0x09000018)
+#else
 static volatile uint16_t *const VGA_BUF = (uint16_t *)0xB8000;
 static uint32_t vga_row = 0;
 static uint32_t vga_col = 0;
+static uint8_t  vga_attr = 0x07;
+static int      ansi_state = 0;
+static int      ansi_arg1 = 0;
+static int      ansi_arg2 = 0;
+static int      ansi_has_arg2 = 0;
 
 static void vga_update_cursor(void)
 {
@@ -16,16 +29,6 @@ static void vga_update_cursor(void)
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
-}
-
-void console_clear(void)
-{
-    for (uint32_t i = 0; i < 80 * 25; ++i) {
-        VGA_BUF[i] = 0x0720;
-    }
-    vga_row = 0;
-    vga_col = 0;
-    vga_update_cursor();
 }
 
 static void vga_scroll(void)
@@ -41,17 +44,10 @@ static void vga_scroll(void)
     }
 }
 
-static uint8_t vga_attr = 0x07;
-static int ansi_state = 0;
-static int ansi_arg1 = 0;
-static int ansi_arg2 = 0;
-static int ansi_has_arg2 = 0;
-
 static void vga_putc(char c)
 {
-    /* Parser bare-metal de secuencias de color ANSI (\033[...m) */
     if (ansi_state == 0) {
-        if ((uint8_t)c == 27) { /* ESC */
+        if ((uint8_t)c == 27) {
             ansi_state = 1;
             return;
         }
@@ -80,19 +76,19 @@ static void vga_putc(char c)
             int code = (ansi_arg1 == 1 && ansi_has_arg2) ? ansi_arg2 : ansi_arg1;
 
             if (ansi_arg1 == 0 && !ansi_has_arg2) {
-                vga_attr = 0x07; /* Reset a gris estandar */
+                vga_attr = 0x07;
             } else {
                 uint8_t fg = 0x07;
-                if (code == 30) fg = 0x00;      /* Negro */
-                else if (code == 31) fg = 0x04; /* Rojo */
-                else if (code == 32) fg = 0x02; /* Verde */
-                else if (code == 33) fg = 0x06; /* Amarillo */
-                else if (code == 34) fg = 0x01; /* Azul */
-                else if (code == 35) fg = 0x05; /* Magenta */
-                else if (code == 36) fg = 0x03; /* Cian */
-                else if (code == 37) fg = 0x07; /* Blanco */
+                if (code == 30) fg = 0x00;
+                else if (code == 31) fg = 0x04;
+                else if (code == 32) fg = 0x02;
+                else if (code == 33) fg = 0x06;
+                else if (code == 34) fg = 0x01;
+                else if (code == 35) fg = 0x05;
+                else if (code == 36) fg = 0x03;
+                else if (code == 37) fg = 0x07;
 
-                if (bold) fg |= 0x08; /* Intensidad alta / brillante */
+                if (bold) fg |= 0x08;
                 vga_attr = fg;
             }
             ansi_state = 0;
@@ -124,15 +120,34 @@ static void vga_putc(char c)
     vga_scroll();
     vga_update_cursor();
 }
+#endif
+
+void console_clear(void)
+{
+#ifdef __x86_64__
+    for (uint32_t i = 0; i < 80 * 25; ++i) {
+        VGA_BUF[i] = 0x0720;
+    }
+    vga_row = 0;
+    vga_col = 0;
+    vga_update_cursor();
+#else
+    kprint("\033[2J\033[H");
+#endif
+}
 
 void kputc(char c)
 {
     if (console_muted) return;
-    while ((inb(COM1 + 5) & 0x20) == 0) {
-    }
+#ifdef __x86_64__
+    while ((inb(COM1 + 5) & 0x20) == 0) {}
     outb(COM1, (uint8_t)c);
-
     vga_putc(c);
+#else
+    while (*PL011_UARTFR & (1 << 5)) {}
+    *PL011_UARTDR = (uint32_t)(uint8_t)c;
+    rpi_fb_putc(c);
+#endif
 }
 
 void kprint(const char *s)
@@ -202,9 +217,7 @@ void kprint_ip(const uint8_t *ip)
     }
 }
 
-/* ====================================================================
- * Controlador de Teclado PS/2 (Scan Code Set 1 - IRQ1)
- * ==================================================================== */
+#ifdef __x86_64__
 #define KBD_BUF_SIZE 128
 static volatile char kbd_buf[KBD_BUF_SIZE];
 static volatile uint32_t kbd_head = 0;
@@ -246,12 +259,12 @@ void keyboard_irq_handler(void)
     if (e0_prefix) {
         e0_prefix = 0;
         char k = 0;
-        if (sc == 0x48) k = 16;      /* Flecha Arriba -> Ctrl+P */
-        else if (sc == 0x50) k = 14; /* Flecha Abajo  -> Ctrl+N */
-        else if (sc == 0x4B) k = 2;  /* Flecha Izq    -> Ctrl+B */
-        else if (sc == 0x4D) k = 6;  /* Flecha Der    -> Ctrl+F */
-        else if (sc == 0x47) k = 1;  /* Home          -> Ctrl+A */
-        else if (sc == 0x4F) k = 5;  /* End           -> Ctrl+E */
+        if (sc == 0x48) k = 16;
+        else if (sc == 0x50) k = 14;
+        else if (sc == 0x4B) k = 2;
+        else if (sc == 0x4D) k = 6;
+        else if (sc == 0x47) k = 1;
+        else if (sc == 0x4F) k = 5;
         if (k != 0) {
             uint32_t next = (kbd_head + 1) % KBD_BUF_SIZE;
             if (next != kbd_tail) {
@@ -282,7 +295,7 @@ void keyboard_irq_handler(void)
         return;
     }
     if (sc & 0x80) {
-        return; /* Ignorar key release */
+        return;
     }
     if (sc < sizeof(kbd_us_lower)) {
         char ch = shift_active ? kbd_us_upper[sc] : kbd_us_lower[sc];
@@ -302,32 +315,40 @@ void keyboard_irq_handler(void)
         }
     }
 }
+#endif
 
 int kgetc_ready(void)
 {
+#ifdef __x86_64__
     if (kbd_head != kbd_tail) {
         return 1;
     }
     return (inb(COM1 + 5) & 0x01) != 0;
+#else
+    return !(*PL011_UARTFR & (1 << 4));
+#endif
 }
 
 char kgetc(void)
 {
     while (!kgetc_ready()) {
         thread_yield();
-        __asm__ volatile ("sti; hlt");   /* el tick de 1 kHz nos despierta */
+        arch_pause();
     }
+#ifdef __x86_64__
     if (kbd_head != kbd_tail) {
         char ch = kbd_buf[kbd_tail];
         kbd_tail = (kbd_tail + 1) % KBD_BUF_SIZE;
         return ch;
     }
     return (char)inb(COM1);
+#else
+    return (char)(*PL011_UARTDR & 0xFF);
+#endif
 }
 
-/* == MOTOR READLINE BARE-METAL == */
 #define CMD_HISTORY_MAX 16
-#define CMD_LINE_MAX    128
+#define CMD_LINE_MAX    512
 
 static char cmd_history[CMD_HISTORY_MAX][CMD_LINE_MAX];
 static int history_count = 0;
@@ -356,18 +377,8 @@ static void history_add(const char *cmd)
 
     history_tail = (history_tail + 1) % CMD_HISTORY_MAX;
     if (history_count < CMD_HISTORY_MAX) history_count++;
+    console_history_sync_to_vfs();
 }
-
-static const char *const shell_dict[] = {
-    "help", "creador", "status", "uptime", "sleep", "date", "time",
-    "free", "df", "tree", "cp", "mv", "touch", "head", "tail", "wc",
-    "grep", "nano", "edit", "ls", "cat", "write", "rm", "fs-sync",
-    "fs-format", "stats", "mem", "heap", "pmm", "vmm", "arp", "pci",
-    "ping", "dns", "curl", "ps", "threads", "spawn", "bg", "kill",
-    "test_suite", "health", "llm", "llm-diag", "soma", "somafetch", "neofetch", "fetch", "myos", "agent",
-    "echo", "hexdump", "xxd", "reboot", "poweroff", "shutdown", "halt",
-    "src_ls", "src_cat", "src_grep", "clear", "cls", 0
-};
 
 #define KEY_ACT_UP    1001
 #define KEY_ACT_DOWN  1002
@@ -389,7 +400,7 @@ static int read_key_action(void)
     if (c == 1)  return KEY_ACT_HOME;
     if (c == 5)  return KEY_ACT_END;
 
-    if (c == 27) { /* ESC o secuencia ANSI */
+    if (c == 27) {
         if (kgetc_ready()) {
             char c2 = kgetc();
             if (c2 == '[') {
@@ -437,13 +448,13 @@ static void redraw_prompt_line(const char *line, uint32_t len, uint32_t cursor, 
 
     uint32_t steps_back = max_v - cursor;
     if (steps_back > 0) {
+#ifdef __x86_64__
         if (vga_col >= steps_back) vga_col -= steps_back;
         else vga_col = 0;
         vga_update_cursor();
-
+#endif
         for (uint32_t i = 0; i < steps_back; ++i) {
-            while ((inb(COM1 + 5) & 0x20) == 0) {}
-            outb(COM1, '\b');
+            kputc('\b');
         }
     }
 }
@@ -586,17 +597,7 @@ int kgetline(char *buf, uint32_t max)
             }
             if (!has_space) {
                 const char *matches[16];
-                int match_count = 0;
-
-                for (int i = 0; shell_dict[i]; ++i) {
-                    int prefix_ok = 1;
-                    for (uint32_t j = 0; j < cursor; ++j) {
-                        if (shell_dict[i][j] != line[j]) { prefix_ok = 0; break; }
-                    }
-                    if (prefix_ok && match_count < 16) {
-                        matches[match_count++] = shell_dict[i];
-                    }
-                }
+                int match_count = shell_autocomplete(line, cursor, matches, 16);
 
                 if (match_count == 1) {
                     prev_len = len;
@@ -624,7 +625,6 @@ int kgetline(char *buf, uint32_t max)
             continue;
         }
 
-        /* Caracter imprimible: directo al final o insercion en caliente en medio */
         if ((uint8_t)act >= 32 && (uint8_t)act < 127) {
             if (len < sizeof(line) - 2) {
                 if (cursor == len) {
@@ -645,6 +645,72 @@ int kgetline(char *buf, uint32_t max)
                     redraw_prompt_line(line, len, cursor, prev_len);
                 }
             }
+        }
+    }
+}
+
+int console_history_dump(char *out_buf, uint32_t max_out)
+{
+    uint32_t pos = 0;
+    kprint("\nHISTORIAL DE COMANDOS:\n----------------------\n");
+    for (int i = 0; i < history_count; ++i) {
+        int idx = (history_tail - history_count + i + CMD_HISTORY_MAX) % CMD_HISTORY_MAX;
+        kprint("  ");
+        kprint_dec((uint32_t)(i + 1));
+        kprint("  ");
+        kprint(cmd_history[idx]);
+        kprint("\n");
+
+        if (out_buf && pos < max_out - 64) {
+            char tb[10]; int tn = 0; uint32_t v = (uint32_t)(i + 1);
+            while (v) { tb[tn++] = (char)('0' + v % 10); v /= 10; }
+            while (tn > 0) out_buf[pos++] = tb[--tn];
+            out_buf[pos++] = ' '; out_buf[pos++] = ' ';
+            const char *p = cmd_history[idx];
+            while (*p && pos < max_out - 2) out_buf[pos++] = *p++;
+            out_buf[pos++] = '\n';
+        }
+    }
+    if (out_buf) out_buf[pos] = '\0';
+    kprint("----------------------\n");
+    return 1;
+}
+
+void console_history_sync_to_vfs(void)
+{
+    static char hist_buf[2048];
+    uint32_t pos = 0;
+    for (int i = 0; i < history_count; ++i) {
+        int idx = (history_tail - history_count + i + CMD_HISTORY_MAX) % CMD_HISTORY_MAX;
+        const char *p = cmd_history[idx];
+        while (*p && pos < sizeof(hist_buf) - 2) hist_buf[pos++] = *p++;
+        hist_buf[pos++] = '\n';
+    }
+    if (pos > 0) {
+        vfs_write("/etc/history.txt", hist_buf, pos);
+    }
+}
+
+void console_history_load_from_vfs(void)
+{
+    static char load_buf[2048];
+    int r = vfs_read("/etc/history.txt", load_buf, sizeof(load_buf) - 1);
+    if (r <= 0) return;
+    load_buf[r] = '\0';
+
+    const char *p = load_buf;
+    while (*p) {
+        while (*p == '\r' || *p == '\n') p++;
+        if (*p == '\0') break;
+
+        char line[CMD_LINE_MAX];
+        uint32_t lp = 0;
+        while (*p && *p != '\n' && *p != '\r' && lp < sizeof(line) - 1) {
+            line[lp++] = *p++;
+        }
+        line[lp] = '\0';
+        if (lp > 0) {
+            history_add(line);
         }
     }
 }

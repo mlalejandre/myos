@@ -102,11 +102,15 @@ map_pd:
 
 
 .align 8
+.global gdt64
+.global gdt64_desc
 
 gdt64:
-    .quad 0x0000000000000000
-    .quad 0x00AF9A000000FFFF
-    .quad 0x00AF92000000FFFF
+    .quad 0x0000000000000000        /* 0x00: Descriptor Nulo */
+    .quad 0x00AF9A000000FFFF        /* 0x08: Codigo Ring 0 64 bits */
+    .quad 0x00AF92000000FFFF        /* 0x10: Datos Ring 0 64 bits */
+    .quad 0x0000000000000000        /* 0x18: TSS low (cargado en C) */
+    .quad 0x0000000000000000        /* 0x20: TSS high (cargado en C) */
 
 gdt64_end:
 

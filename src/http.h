@@ -4,25 +4,18 @@
 #include <stdint.h>
 
 struct http_response {
-    int      status_code;     /* 200, 404, etc. -1 si hay error o timeout */
-    char    *body;            /* Puntero al inicio del body dentro del buffer */
-    uint32_t body_len;        /* Longitud del body en bytes */
-};
+    char    *body;            /* 8 bytes (offset 0, 8-byte aligned) */
+    uint32_t body_len;        /* 4 bytes (offset 8) */
+    int      status_code;     /* 4 bytes (offset 12) -> total 16 B */
+} __attribute__((aligned(8)));
 
-/*
- * Peticion HTTP generica (GET / POST).
- * buf: buffer de recepcion proporcionado por el llamante.
- * buf_size: tamano maximo del buffer.
- * resp: estructura rellenada con status_code, body y body_len.
- * Devuelve status_code (>= 0) o -1 en caso de error.
- */
 int http_request(
     const uint8_t *ip,
     uint16_t port,
     const char *method,
     const char *path,
-    const char *content_type,   /* opcional, ej: "application/json" */
-    const char *body,           /* opcional para POST */
+    const char *content_type,
+    const char *body,
     uint32_t body_len,
     char *buf,
     uint32_t buf_size,

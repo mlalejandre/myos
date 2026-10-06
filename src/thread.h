@@ -12,46 +12,34 @@
 typedef void (*thread_func_t)(void *arg);
 
 struct tcb {
-    uint64_t        rsp;            /* Offset 0: Puntero de pila guardado */
-    uint32_t        tid;            /* Identificador unico */
-    uint32_t        state;          /* READY, RUNNING, SLEEPING, DEAD */
-    char            name[32];       /* Nombre descriptivo */
-    thread_func_t   entry;          /* Funcion de entrada */
-    void           *arg;            /* Argumento */
-    uint64_t        sleep_until_ms; /* Despertar en uptime ms */
-    uint64_t        stack_slot;     /* Base virtual de la ventana de pila */
-    uint64_t        ticks_run;      /* Estadistica de ejecucion */
-    struct tcb     *next;           /* Siguiente en lista circular */
-};
+    uint64_t        rsp;            /* Offset 0: 8 bytes */
+    uint64_t        sleep_until_ms; /* Offset 8: 8 bytes */
+    uint64_t        stack_slot;     /* Offset 16: 8 bytes */
+    uint64_t        ticks_run;      /* Offset 24: 8 bytes */
+    thread_func_t   entry;          /* Offset 32: 8 bytes */
+    void           *arg;            /* Offset 40: 8 bytes */
+    struct tcb     *next;           /* Offset 48: 8 bytes */
+    uint32_t        tid;            /* Offset 56: 4 bytes */
+    uint32_t        state;          /* Offset 60: 4 bytes */
+    char            name[32];       /* Offset 64: 32 bytes -> total 96 B */
 
-/* Inicializa el subsistema de hilos, Hilo 0 (kernel_main), Hilo 1 (idle) e Hilo 2 (netd) */
+    /* PARCHE 046: estado por hilo (politica del agente, recursion del shell) */
+    int             agent_mode;     /* Offset 96: 1 = ejecutando bajo politica Agente */
+    int             source_depth;   /* Offset 100: anidamiento de 'source' */
+    int             dispatch_depth; /* Offset 104: anidamiento de dispatch_command */
+    int             pad_ext;        /* Offset 108 -> total 112 B */
+} __attribute__((aligned(16)));
+
 void thread_init(void);
-
-/* Crea un nuevo hilo de kernel con pila propia y pagina de guarda */
 struct tcb *thread_create(const char *name, thread_func_t entry, void *arg);
-
-/* Cede voluntariamente el control al siguiente hilo disponible */
 void thread_yield(void);
-
-/* Pone el hilo actual en reposo durante N milisegundos */
 void thread_sleep(uint32_t ms);
-
-/* Finaliza el hilo actual marcandolo como DEAD */
 void thread_exit(void);
-
-/* Termina forzosamente un hilo no protegido por su TID (1 = exito, 0 = error o protegido) */
-int thread_kill(uint32_t tid);
-
-/* Devuelve el TCB del hilo actualmente en ejecucion */
+int  thread_kill(uint32_t tid);
 struct tcb *thread_current(void);
-
-/* Recolecta y libera los recursos de los hilos finalizados (DEAD) */
 void thread_reap_dead(void);
-
-/* Imprime el estado de todos los hilos del sistema */
 void thread_dump(void);
-
-/* Auto-test con demonios de fondo y ciclo de vida de hilo efimero con recoleccion */
-int thread_test_self(void);
+int  thread_test_self(void);
+int  thread_format_table(char *out, uint32_t max);
 
 #endif

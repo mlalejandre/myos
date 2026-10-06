@@ -1,3 +1,5 @@
+#include "httpd.h"
+#include "tcp.h"
 #include "fs.h"
 #include "sysinfo.h"
 #include "thread.h"
@@ -13,7 +15,11 @@
 extern void switch_context(uint64_t *old_rsp, uint64_t new_rsp);
 extern void thread_trampoline_asm(void);
 
+#ifdef __x86_64__
 #define THREAD_STACK_BASE  0x0000000080000000ULL
+#else
+#define THREAD_STACK_BASE  0x0000000043000000ULL /* RAM física en QEMU virt */
+#endif
 #define THREAD_SLOT_SIZE   0x00010000ULL /* 64 KiB */
 #define THREAD_STACK_PAGES 8             /* 32 KiB reales de pila */
 
@@ -118,7 +124,7 @@ struct tcb *thread_create(const char *name, thread_func_t entry, void *arg)
     }
 
     uint64_t *sp = (uint64_t *)stack_top;
-    /* Orden inverso a switch_context: rip, rbp, rbx, r12-r15, rflags (el ultimo se pop primero) */
+#ifdef __x86_64__
     *(--sp) = (uint64_t)thread_trampoline_asm;
     *(--sp) = 0;    /* rbp */
     *(--sp) = 0;    /* rbx */
@@ -127,6 +133,20 @@ struct tcb *thread_create(const char *name, thread_func_t entry, void *arg)
     *(--sp) = 0;    /* r14 */
     *(--sp) = 0;    /* r15 */
     *(--sp) = 0x202ULL;   /* rflags (IF=1) */
+#else
+    *(--sp) = 0; /* x20 */
+    *(--sp) = 0; /* x19 */
+    *(--sp) = 0; /* x22 */
+    *(--sp) = 0; /* x21 */
+    *(--sp) = 0; /* x24 */
+    *(--sp) = 0; /* x23 */
+    *(--sp) = 0; /* x26 */
+    *(--sp) = 0; /* x25 */
+    *(--sp) = 0; /* x28 */
+    *(--sp) = 0; /* x27 */
+    *(--sp) = (uint64_t)thread_trampoline_asm; /* x30 (LR) */
+    *(--sp) = 0; /* x29 (FP) */
+#endif
 
     t->rsp = (uint64_t)sp;
 
@@ -169,12 +189,19 @@ void thread_reap_dead(void)
 }
 
 /* Hilo 1: Idle Task en reposo de CPU con HLT */
+#include "arch.h"
+
 static void idle_thread_func(void *arg)
 {
     (void)arg;
     for (;;) {
         thread_reap_dead();
-        __asm__ volatile ("sti; hlt");
+#ifdef __x86_64__
+        arch_interrupts_enable();
+        arch_halt();
+#else
+        arch_pause();
+#endif
         thread_yield();
     }
 }
@@ -184,9 +211,11 @@ static void netd_thread_func(void *arg)
 {
     (void)arg;
     for (;;) {
+        net_lock();
         while (net_poll()) {
             /* Vaciar cola de recepcion */
         }
+        net_unlock();
         thread_sleep(10);
     }
 }
@@ -252,9 +281,15 @@ void thread_init(void)
     kmain->state = THREAD_STATE_RUNNING;
     kmain->next = kmain;
 
+#ifdef __x86_64__
     uint64_t cur_rsp;
     __asm__ volatile ("mov %%rsp, %0" : "=r"(cur_rsp));
     kmain->rsp = cur_rsp;
+#else
+    uint64_t cur_sp;
+    __asm__ volatile ("mov %0, sp" : "=r"(cur_sp));
+    kmain->rsp = cur_sp;
+#endif
 
     thread_list = kmain;
     curr_thread = kmain;
@@ -268,6 +303,7 @@ void thread_init(void)
 
     /* Hilo 3: sysmon daemon */
     thread_create("sysmon", sysmon_thread_func, 0);
+    thread_create("httpd", httpd_thread_func, 0);
 
     kprint("KTHREADS: Inicializado (Hilo 0: 'kernel_main', Hilo 1: 'idle', Hilo 2: 'netd', Hilo 3: 'sysmon')\n");
 }
@@ -344,12 +380,13 @@ void thread_sleep(uint32_t ms)
 void thread_exit(void)
 {
     if (!curr_thread) return;
+    tcp_cleanup_for_thread(curr_thread->tid);
     kmutex_release_all_for_thread(curr_thread);
     curr_thread->state = THREAD_STATE_DEAD;
     schedule();
 
     for (;;) {
-        __asm__ volatile ("hlt");
+        arch_halt();
     }
 }
 
@@ -363,11 +400,12 @@ int thread_kill(uint32_t tid)
     do {
         if (t->tid == tid) {
             if (t->state != THREAD_STATE_DEAD) {
+                tcp_cleanup_for_thread(tid);
                 kmutex_release_all_for_thread(t);
                 t->state = THREAD_STATE_DEAD;
                 if (t == curr_thread) {
                     schedule();
-                    for (;;) { __asm__ volatile ("hlt"); }
+                    for (;;) { arch_halt(); }
                 }
                 return 1;
             }
@@ -484,4 +522,62 @@ int thread_test_self(void)
     kprint("  Hilo efimero ejecutado, terminado y recolectado OK (0 fugas PMM)\n");
     kprint("[KTHREAD REAPER TEST] SUPERADO CON EXITO (Gestion de Recursos OK).\n\n");
     return 1;
+}
+
+
+int thread_format_table(char *out, uint32_t max)
+{
+    if (!out || max == 0) return 0;
+    uint32_t pos = 0;
+    const char *hdr = "TID   NOMBRE          ESTADO     TICKS      RSP\n";
+    while (*hdr && pos < max - 1) out[pos++] = *hdr++;
+
+    if (!thread_list) {
+        out[pos] = '\0';
+        return (int)pos;
+    }
+
+    struct tcb *t = thread_list;
+    do {
+        char line[80];
+        for (int i = 0; i < 79; ++i) line[i] = ' ';
+
+        /* TID col 0 */
+        char tb[10]; int tn = 0; uint32_t v = t->tid;
+        if (v == 0) tb[tn++] = '0';
+        else while (v) { tb[tn++] = (char)('0' + v % 10); v /= 10; }
+        for (int k = 0; k < tn; ++k) line[k] = tb[tn - 1 - k];
+
+        /* Nombre col 6 */
+        for (int k = 0; t->name[k] && k < 14; ++k) line[6 + k] = t->name[k];
+
+        /* Estado col 22 */
+        const char *st = (t->state == THREAD_STATE_RUNNING) ? "RUNNING" :
+                         (t->state == THREAD_STATE_READY)   ? "READY" :
+                         (t->state == THREAD_STATE_SLEEPING)? "SLEEP" : "DEAD";
+        for (int k = 0; st[k]; ++k) line[22 + k] = st[k];
+
+        /* Ticks col 33 */
+        tn = 0; v = (uint32_t)t->ticks_run;
+        if (v == 0) tb[tn++] = '0';
+        else while (v) { tb[tn++] = (char)('0' + v % 10); v /= 10; }
+        for (int k = 0; k < tn; ++k) line[33 + k] = tb[tn - 1 - k];
+
+        /* RSP col 44 */
+        const char hex[] = "0123456789ABCDEF";
+        uint32_t rsp32 = (uint32_t)t->rsp;
+        line[44] = '0'; line[45] = 'x';
+        for (int sh = 28; sh >= 0; sh -= 4) line[46 + (7 - sh/4)] = hex[(rsp32 >> sh) & 0xF];
+
+        int end_col = 54;
+        line[end_col++] = '\n';
+        line[end_col] = '\0';
+
+        for (int k = 0; k < end_col && pos < max - 1; ++k) out[pos++] = line[k];
+
+        t = t->next;
+    } while (t != thread_list);
+
+    out[pos] = '\0';
+    return (int)pos;
 }

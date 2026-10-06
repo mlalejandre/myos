@@ -8,12 +8,13 @@
 #define FS_DATA_MAX  4096
 
 struct vfs_file {
-    char     name[FS_NAME_MAX];
-    uint8_t  used;
-    uint8_t  dirty;   /* 1 = modificado en memoria, pendiente de escribir en disco */
-    uint32_t size;
-    char     data[FS_DATA_MAX];
-};
+    char     name[FS_NAME_MAX]; /* 48 bytes (offset 0..47) */
+    uint32_t size;              /* 4 bytes (offset 48..51, divisible por 4 y 8) */
+    uint8_t  used;              /* 1 byte (offset 52) */
+    uint8_t  dirty;             /* 1 byte (offset 53) */
+    uint8_t  pad[10];           /* 10 bytes (offset 54..63) -> cabecera = 64 B */
+    char     data[FS_DATA_MAX]; /* 4096 bytes (offset 64 -> 100% alineado a 64 B) */
+} __attribute__((aligned(64)));
 
 void vfs_init(void);
 int  vfs_create(const char *name, const char *initial_data);

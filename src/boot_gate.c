@@ -199,7 +199,13 @@ void boot_gate_check(void)
         qemu_exit(0x22);
     }
 
-    kprint("[PUERTA DE ARRANQUE] EXITO: Kernel verificado en modo local.\n");
+    /* 4. Comprobacion de red activa (ICMP ping al gateway 10.0.2.2) */
+    if (icmp_ping(net_gateway, 101, 1000) != 1) {
+        kprint("[PUERTA DE ARRANQUE] FALLO: Pila de red no responde.\n");
+        qemu_exit(0x22);
+    }
+
+    kprint("[PUERTA DE ARRANQUE] EXITO: Kernel verificado (RAM, Disco, VFS y Red OK).\n");
     kprint("Notificando al host (aprobacion de parche inmediata)...\n");
     boot_gate_active = 0;
     qemu_exit(0x20); /* QEMU_EXIT_GATE_OK */

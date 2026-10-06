@@ -5,28 +5,17 @@
 #include "thread.h"
 
 struct kmutex {
-    volatile int  locked;
-    struct tcb   *owner;
-    const char   *name;
-    volatile int  depth;     /* profundidad de recursion del propietario */
-};
+    struct tcb   *owner;    /* Offset 0: 8 bytes */
+    const char   *name;     /* Offset 8: 8 bytes */
+    volatile int  locked;   /* Offset 16: 4 bytes */
+    volatile int  depth;    /* Offset 20: 4 bytes -> total 24 B */
+} __attribute__((aligned(8)));
 
-/* Inicializa un mutex con nombre descriptivo */
 void kmutex_init(struct kmutex *m, const char *name);
-
-/* Bloquea el mutex; si esta ocupado cede voluntariamente la CPU (thread_yield) */
 void kmutex_lock(struct kmutex *m);
-
-/* Intenta adquirir el mutex sin bloquear (devuelve 1 si OK, 0 si ocupado) */
-int kmutex_trylock(struct kmutex *m);
-
-/* Libera el mutex */
+int  kmutex_trylock(struct kmutex *m);
 void kmutex_unlock(struct kmutex *m);
-
-/* Libera forzosamente todos los mutexes que pertenecian a un hilo que ha muerto o sido terminado */
 void kmutex_release_all_for_thread(struct tcb *t);
-
-/* Auto-test de exclusion mutua concurrente con dos hilos y recuperacion tras kill */
-int kmutex_test_self(void);
+int  kmutex_test_self(void);
 
 #endif

@@ -33,6 +33,9 @@ struct trap_frame {
     uint64_t ss;
 };
 
+/* Inicializa el TSS de 64 bits con la pila de rescate IST1 */
+void tss_init(void);
+
 /* Inicializa la IDT y carga el registro IDTR */
 void idt_init(void);
 

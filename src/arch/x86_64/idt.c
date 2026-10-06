@@ -51,6 +51,52 @@ static const char *exception_names[32] = {
     "Reserved", "Reserved"
 };
 
+struct tss_entry {
+    uint32_t reserved0;
+    uint64_t rsp0;
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist1;
+    uint64_t ist2;
+    uint64_t ist3;
+    uint64_t ist4;
+    uint64_t ist5;
+    uint64_t ist6;
+    uint64_t ist7;
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iomap_base;
+} __attribute__((packed));
+
+extern uint64_t gdt64[];
+static struct tss_entry kernel_tss __attribute__((aligned(16)));
+static uint8_t ist1_emergency_stack[16384] __attribute__((aligned(16)));
+
+void tss_init(void)
+{
+    for (uint32_t i = 0; i < sizeof(kernel_tss); ++i) {
+        ((uint8_t *)&kernel_tss)[i] = 0;
+    }
+    uint64_t ist1_top = (uint64_t)&ist1_emergency_stack[sizeof(ist1_emergency_stack)];
+    kernel_tss.ist1 = ist1_top;
+    kernel_tss.iomap_base = sizeof(kernel_tss);
+
+    uint64_t base = (uint64_t)&kernel_tss;
+    uint64_t limit = sizeof(kernel_tss) - 1;
+
+    /* Descriptor TSS 64 bits en GDT (offset 0x18: 16 bytes) */
+    gdt64[3] = (limit & 0xFFFFULL) |
+               ((base & 0xFFFFFFULL) << 16) |
+               (0x89ULL << 40) |
+               (((limit >> 16) & 0x0FULL) << 48) |
+               (((base >> 24) & 0xFFULL) << 56);
+    gdt64[4] = (base >> 32) & 0xFFFFFFFFULL;
+
+    __asm__ volatile ("ltr %0" : : "r"((uint16_t)0x18));
+    kprint("TSS: 64-bit activo con IST1 de emergencia (16 KiB en selector 0x18)\n");
+}
+
 static void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags)
 {
     idt[num].offset_low  = (uint16_t)(base & 0xFFFF);
@@ -60,6 +106,12 @@ static void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags
     idt[num].offset_mid  = (uint16_t)((base >> 16) & 0xFFFF);
     idt[num].offset_high = (uint32_t)((base >> 32) & 0xFFFFFFFF);
     idt[num].zero        = 0;
+}
+
+static void idt_set_gate_ist(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags, uint8_t ist)
+{
+    idt_set_gate(num, base, sel, flags);
+    idt[num].ist = ist & 0x07;
 }
 
 static inline uint64_t read_cr0(void)
@@ -227,6 +279,7 @@ void isr_exception_handler(struct trap_frame *tf)
         kprint("[PUERTA DE ARRANQUE] Fallo critico durante prueba canaria. Abortando QEMU...\n");
         qemu_exit(0x22);
     }
+    qemu_exit(0x23); /* Salida con codigo 0x47 observable por el host */
 
     for (;;) {
         __asm__ volatile ("cli; hlt");
@@ -235,13 +288,19 @@ void isr_exception_handler(struct trap_frame *tf)
 
 void idt_init(void)
 {
+    tss_init();
+
     for (int i = 0; i < 34; ++i) {
         idt_set_gate((uint8_t)i, (uint64_t)isr_stub_table[i], 0x08, 0x8E);
     }
+
+    /* Blindaje anti-Triple Fault: #DF (8) y #PF (14) conmutan a pila IST1 */
+    idt_set_gate_ist(8,  (uint64_t)isr_stub_table[8],  0x08, 0x8E, 1);
+    idt_set_gate_ist(14, (uint64_t)isr_stub_table[14], 0x08, 0x8E, 1);
 
     idtr_desc.limit = (uint16_t)(sizeof(idt) - 1);
     idtr_desc.base  = (uint64_t)&idt;
 
     __asm__ volatile ("lidt %0" : : "m"(idtr_desc));
-    kprint("IDT: 32 excepciones + IRQ0/1 registradas (Vectores 0-33 OK)\n");
+    kprint("IDT: 32 excepciones registradas (IST1 activo en #DF/#PF)\n");
 }
