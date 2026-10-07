@@ -177,7 +177,12 @@ static void handle_frame(const uint8_t *f, uint16_t len)
 
 int net_init(void)
 {
+    /* PARCHE 047: idempotente. Re-ejecutar virtio_net_init() re-inicializa las colas
+     * y deja el dispositivo en FAILED. */
+    static int net_inited = 0;
+    if (net_inited) return 1;
     if (!virtio_net_init()) return 0;
+    net_inited = 1;
     memcpy(net_mac, virtio_net_mac(), 6);
     kprint("\nNET: MAC "); kprint_mac(net_mac);
     kprint("  IP "); kprint_ip(net_ip);

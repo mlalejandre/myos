@@ -12,6 +12,7 @@
 #include "fs.h"
 #include "boot_gate.h"
 #include "llm.h"
+#include "net.h"
 #include "shell.h"
 #include "agent.h"
 #include "io.h"
@@ -64,6 +65,7 @@ void kernel_main(void)
 
     vfs_init();
 
+    net_init(); /* PARCHE 047: la red debe estar viva antes del canary (ping al gateway) */
     boot_gate_check();
 
 #ifdef __x86_64__

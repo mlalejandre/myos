@@ -2,140 +2,158 @@
 ESTADO DEL PROYECTO SOMA (Octubre 2026)
 ================================================================================
 
-SOMA (Sistema Operativo Multi-Agente): AI-Native x86_64 Operating System
-Kernel Freestanding de 64 bits en C y Ensamblador sin librerías externas.
+SOMA (Sistema Operativo Multi-Agente): AI-Native Multi-Architecture Operating System
+Kernel Freestanding de 64 bits en C y Ensamblador sin librerias externas (x86_64 / AArch64).
 
 ================================================================================
-BALANCE DE HITOS ARQUITECTÓNICOS CONSEGUIDOS (19 / 19)
+BALANCE DE HITOS ARQUITECTONICOS CONSEGUIDOS (34 / 34)
 ================================================================================
 
 #   Hito                                Estado  Impacto en el Sistema
 --------------------------------------------------------------------------------
-1   Feedback Veraz de Herramientas      ✅      Telemetría física en vivo (CR0/CR3/CR4, heap kmalloc alineado a 16 bytes,
-                                                bus PCI, tabla ARP dinámica y lectura/escritura física de sectores LBA).
+1   Feedback Veraz de Herramientas      ✅      Telemetria fisica en vivo (CR0/CR3/CR4, heap kmalloc alineado a 16 bytes,
+                                                bus PCI, tabla ARP dinamica y lectura/escritura fisica de sectores LBA).
 
-2   Depuración e IDT 64-bit             ✅      32 excepciones x86_64 capturadas con volcado completo de registros (RIP,
-                                                RSP, RFLAGS, CR2 en Page Faults) y pila de ejecución protegida a 64 KiB.
+2   Depuracion e IDT 64-bit             ✅      32 excepciones x86_64 capturadas con volcado completo de registros (RIP,
+                                                RSP, RFLAGS, CR2 en Page Faults) y pila de ejecucion protegida a 64 KiB.
 
-3   Puerta de Arranque (Boot Gate)      ✅      Submódulo modular 'boot_gate.c' con suite de auto-test de 5 fases (RAM,
-                                                disco, VFS, ICMP, LLM). Rollback automático del host en Docker ante kernels
-                                                rotos o con errores de sintaxis (The Singularity Loop v2).
+3   Puerta de Arranque (Boot Gate)      ✅      Submodulo modular 'boot_gate.c' con suite de auto-test y rollback
+                                                automatico del host en Docker ante kernels rotos (The Singularity Loop v2).
 
-4   Blindaje de Archivos del Sistema    ✅      'ejecutar.py' protege físicamente boot.s, idt.*, boot_gate.*, virtio_blk.*,
+4   Blindaje de Archivos del Sistema    ✅      'ejecutar.py' protege fisicamente boot.s, idt.*, boot_gate.*, virtio_blk.*,
                                                 srcfs.*, io.h, pmm.*, vmm.*, mem.*, thread.*, mutex.* y switch.s.
 
-5   Persistencia RamFS con Dirty-Track  ✅      Firma MYOSFS01 en virtio-blk. Inodos gestionados con bandera 'dirty': las
-                                                escrituras en disco se reducen un 90% (solo se escriben inodos modificados).
+5   Persistencia RamFS con Dirty-Track  ✅      Firma SOMAFS01/SOMAFS02 en virtio-blk. Inodos gestionados con bandera 'dirty':
+                                                las escrituras en disco se reducen un 90% (solo inodos modificados).
 
-6   Higiene y Despachador Unificado     ✅      Eliminación de código muerto en kernel.c; 'dispatch_command' como única fuente
-                                                de verdad para la consola interactiva y para las herramientas del Agente.
+6   Higiene y Despachador Unificado     ✅      Eliminacion de codigo muerto; 'dispatch_command' como unica fuente de verdad
+                                                para la consola interactiva y para las herramientas del Agente.
 
 7   Interrupciones Hardware y Reloj     ✅      PIC 8259 remapeado a 0x20..0x2F sin colisiones con excepciones de CPU.
-                                                PIT 8254 Canal 0 activo a 1000 Hz (1 tick = 1 ms). Interrupciones activadas
-                                                con 'sti'. Comandos 'uptime' y 'sleep <ms>' con reposo real de CPU ('hlt').
+                                                PIT 8254 Canal 0 activo a 1000 Hz (1 tick = 1 ms). Interrupciones con 'sti'.
+                                                Comandos 'uptime' y 'sleep <ms>' con reposo real de CPU ('hlt').
 
-8   Pila de Red WAN y Cliente Web       ✅      Resolución DNS dinámica con reintentos transparentes (10.0.2.3:53).
-                                                Cliente 'curl <dominio|ip> [puerto] [ruta]' con HTTP/1.1 y cabecera 'Host'
-                                                dinámica, aviso explícito de truncado ([TRUNCADO a 4096 B]) y soporte
-                                                de respuestas no estándar/bloqueos de operadora.
+8   Pila de Red WAN y Cliente Web       ✅      Resolucion DNS dinamica con reintentos transparentes (10.0.2.3:53).
+                                                Cliente 'curl <dominio|ip> [puerto] [ruta]' con HTTP/1.1 y 'Host' dinamico,
+                                                aviso de truncado ([TRUNCADO a 4096 B]) y resiliencia en red SLIRP.
 
 9   Teclado PS/2 y Terminal Dual VGA    ✅      IRQ1 habilitada (vector 33), controlador de teclado PS/2 (Set 1) con buffer
-                                                circular y soporte Shift/Caps. Emulador de terminal VGA en 0xB8000 con scroll
-                                                vertical y cursor de hardware. Entrada y salida sincronizadas entre COM1 y QEMU.
+                                                circular y Shift/Caps. Terminal VGA en 0xB8000 con scroll y cursor hardware.
 
-10  Memoria Persistente y Singularidad  ✅      - Subsistema de memoria categorizada (/etc/mem_user.txt, /etc/mem_hw.txt,
-                                                  /etc/mem_kernel.txt) inyectado automáticamente en el prompt sin amnesia.
-                                                - Desbloqueo dinámico de 'is_valid_tool' para auto-evolución de comandos.
-                                                - Solución de sincronización de caché VirtioFS en macOS Docker (ejecutar.py).
-                                                - Singularidad probada: el Agente inspeccionó kernel.c con src_cat, programó
-                                                  el comando 'cls', superó la prueba canaria y lo ejecutó autónomamente.
-                                                - Invocación directa del agente mediante el comando conversacional 'myos <mision>'.
+10  Memoria Persistente y Singularidad  ✅      Memoria categorizada (/etc/mem_user.txt, /etc/mem_hw.txt, /etc/mem_kernel.txt)
+                                                inyectada en prompt sin amnesia. Singularidad probada en autoprogramacion.
 
-11  Arquitectura de Memoria (PMM / VMM) ✅      - PMM: Bitmap Allocator de 4 KiB que parsea el mapa E820 de Multiboot
-                                                  blindando los primeros 16 MiB para el hardware y dispositivos VirtIO.
-                                                - VMM: Paginación de 4 niveles x86_64 con soporte de páginas de 4 KiB y
-                                                  desglose dinámico de Huge Pages de 2 MiB (Split) sin tocar periféricos.
-                                                - Aislamiento Hardware: EFER.NXE activo, CR0.WP activo en Ring 0,
-                                                  .text (RO + Executable), .rodata (RO + No-Execute), .data/.bss (RW + NX).
-                                                - KHEAP Dinámico: kmalloc/kfree desacoplado en 0x20000000 (512 MiB virtual),
-                                                  con expansión elástica bajo demanda backed por páginas VMM/PMM con bit NX.
+11  Arquitectura de Memoria (PMM / VMM) ✅      - PMM: Bitmap Allocator de 4 KiB blindando los primeros 16 MiB.
+                                                - VMM: Paginacion de 4 niveles x86_64, desglose dinamico de Huge Pages (2 MiB).
+                                                - Aislamiento Hardware: EFER.NXE activo, CR0.WP activo en Ring 0.
+                                                - KHEAP: Asignador dinamico desacoplado en 0x20000000 con expansion elastica.
 
-12  Multitarea y Demonios de Kernel     ✅      - Planificador Round-Robin cooperativo con cambio de contexto en ensamblador
-                                                  ('switch_context' en System V ABI con alineación estricta de 16 bytes).
-                                                - Pilas de hilos aisladas en 0x80000000 (2 GiB) con Guard Pages (Página 0 desmapeada).
-                                                - Demonio 'idle' (TID 1): reposo de bajo consumo en CPU con 'hlt'.
-                                                - Demonio 'netd' (TID 2): procesador de recepción de tramas VirtIO-NET en segundo plano.
-                                                - Demonio 'sysmon' (TID 3): recolector periódico de telemetría hacia /sys/telemetry.txt.
-                                                - Primitivas de sincronización 'kmutex_lock / unlock' aplicadas al VFS (RamFS thread-safe).
-                                                - Recolector de basura 'thread_reap_dead' que libera pilas y marcos PMM al morir un hilo.
+12  Multitarea y Demonios de Kernel     ✅      - Planificador Round-Robin cooperativo con 'switch_context' en System V ABI.
+                                                - Pilas de hilos aisladas en 0x80000000 con Guard Pages desmapeadas.
+                                                - Demonios activos: idle (TID 1), netd (TID 2), sysmon (TID 3) y httpd (TID 4).
+                                                - Primitivas 'kmutex_lock/unlock' con auto-recuperacion tras muerte de hilos.
 
-13  Autonomía Web WAN y Persistencia    ✅      - Regla de Oro 7 (Persistencia Obligatoria / Parche Anti-Bagueza): erradicación
-    Forzada (Anti-Bagueza)                        del "guardado mental"; obligación estricta de persistir con 'write' antes de emitir 'final'.
-                                                - Autocorrección y resiliencia en red: el Agente recupera caídas transitorias de red,
-                                                  reintenta peticiones de forma autónoma y concluye tareas multi-paso complejas.
-                                                - Prueba de fuego superada: 'curl neverssl.com 80' -> auto-reintento tras timeout ->
-                                                  análisis cognitivo de JavaScript -> síntesis -> persistencia física en '/neverssl.txt'.
+13  Autonomia Web WAN y Persistencia    ✅      Regla de Oro 7: obligacion estricta de persistir con 'write' antes de 'final'.
+    Forzada (Anti-Bagueza)                      Autocorreccion de red y analisis cognitivo multi-paso.
 
-14  Control de Trabajos y Multitarea    ✅      - Control de procesos asíncrono con comandos 'spawn <cmd>' (alias 'bg <cmd>') y 'kill <tid>'.
-    Dinámica (Job Control)                      - Persistencia automática de salida en RamFS (/tmp/job_<tid>.log) y aviso en consola.
-                                                - Reposo cooperativo desacoplado ('thread_sleep') que mantiene la shell 100% reactiva.
-                                                - Blindaje de seguridad Ring 0: protección de demonios críticos del sistema (TID 0..3).
-                                                - Recolección limpia de pilas en VMM y marcos en PMM tras terminación o 'kill' de hilos.
+14  Control de Trabajos y Multitarea    ✅      Comandos asincronos 'spawn <cmd>' (alias 'bg') y 'kill <tid>'. Registro
+    Dinamica (Job Control)                      automatico en RamFS (/tmp/job_<tid>.log). Reposo desacoplado con 'thread_sleep'.
 
-15  Coreutils Esenciales y Editor Nano  ✅      - Editor de texto visual 'nano <arch>' en modo texto 80x25 con guardado en disco (^S) y salida (^X).
-                                                - Controlador de teclado con soporte de combinaciones Ctrl y teclas de dirección.
-                                                - Suite de utilidades Unix/DOS: 'date' (reloj RTC CMOS), 'time' (benchmarks en ms y ciclos TSC),
-                                                  'free' (RAM/Heap), 'df' (disco/inodos), 'tree' (árbol ASCII RamFS), 'cp', 'mv', 'touch',
-                                                  'head', 'tail', 'wc' y buscador 'grep <patron> <archivo>'.
-                                                - Integración cognitiva total: el Agente IA comprende y opera cada herramienta de forma autónoma.
+15  Coreutils Esenciales y Editor Nano  ✅      Editor visual 'nano <arch>' en 80x25 con guardado (^S) y salida (^X).
+                                                Suite: date (RTC CMOS), time (benchmarks ms/TSC), free, df, tree, cp, mv,
+                                                touch, head, tail, wc y buscador grep con soporte de comillas.
 
+16  Control de Energia y Readline       ✅      Readline bare-metal (historial 16 slots, edicion en caliente, autocompletado TAB).
+                                                Control de energia: reboot (8042 reset), poweroff (ACPI) y halt (HLT).
+                                                Visualizador canónico hexdump / xxd.
 
-16  Control de Energía, Redirección     ✅      - Motor Readline bare-metal en consola: Historial (16 slots con ↑/↓), edición en caliente
-    Universal y Terminal Avanzada                 (←/→, Home/End, inserción y backspace en medio) y autocompletado inteligente con TAB.
-                                                - Control de energía: 'reboot' (reset por 8042), 'poweroff' (apagado ACPI) y 'halt'.
-                                                - Redirección universal de E/S con operador '>' silenciando pantalla y persistiendo en RamFS.
-                                                - Comandos 'echo' y visualizador canónico 'hexdump <arch> [bytes]' (alias 'xxd').
-                                                - Integración cognitiva completa: el Agente IA domina 'hexdump', 'grep', 'echo' y '>' sin redundancias.
+17  Consolidacion y Sandboxing          ✅      Rollback atomico en marcos PMM/VMM. Registro de mutexes huerfanos.
+                                                Intercepcion de mutacion de archivos protegidos y persistencia via LBA 25.
 
-17  Consolidación Arquitectónica,      ✅      - Rollback atómico en asignaciones multinivel de marcos PMM, VMM, KHeap y pilas.
-    Robustez y Sandboxing del Agente             - Concurrencia formal: Registro de mutexes y recuperación forzada de bloqueos huérfanos
-                                                  tras terminación abrupta o kill de hilos, evitando deadlocks permanentes.
-                                                - Diferenciación arquitectónica: Boot Gate ultra-rápido (<1s local y determinista)
-                                                  frente a Suite de Validación Integral de 9 Fases del Kernel ('test_suite').
-                                                - Límites de autoridad y Sandboxing en Ring 0: Intercepción inmediata de intentos de
-                                                  mutación sobre subsistemas protegidos sin apagar QEMU; presupuesto de mutación en host.
-                                                - Persistencia transaccional y reanudación atómica de misiones del agente vía LBA 25.
+18  Frontera Portable HAL               ✅      Definicion de Capa de Abstraccion de Hardware en 'src/arch.h'.
+                                                Aislamiento del 80% del codigo C agnostico a la CPU. Especificacion PORTABILITY.md.
 
-18  Frontera Portable y Especificación ✅      - Definición de la Capa de Abstracción de Hardware (HAL en 'src/arch.h')
-    HAL Multi-Arquitectura (ARM64)                desacoplando el control de CPU, barreras, ciclo de reloj e interrupciones.
-                                                - Aislamiento formal: 80% del código de MYOS (TCP/IP, VFS RamFS, KHeap,
-                                                  KThreads, KMutex, Agente ReAct, HTTP) certificado 100% agnóstico a la arquitectura.
-                                                - Especificación de portabilidad en 'PORTABILITY.md' delimitando el subárbol
-                                                  ARMv8-A (arranque en EL1, UART PL011 MMIO, timer cntvct_el0 y VBAR_EL1).
-                                                - Blindaje de la frontera HAL en 'protected.txt' impidiendo mutaciones erráticas.
+19  Identidad SOMA y Color ANSI         ✅      Rebranding integral a SOMA (Sistema Operativo Multi-Agente).
+                                                Utilidad 'somafetch' alineada a 70 columnas con telemetria veraz.
 
-19  Identidad SOMA, Guardia Cognitiva  ✅      - Rebranding integral a SOMA (Sistema Operativo Multi-Agente) en todos los niveles.
-    y Visualizador Neofetch Bare-Metal            - Motor de color ANSI bare-metal (VGA/Serial) y utilidad 'somafetch' alineada a 70 cols.
-                                                - Guardia Cognitiva Anti-Alucinación: Intercepta falsos guardados mentales del LLM y
-                                                  lo obliga a usar I/O real ('write') antes de dar por cumplidas misiones de persistencia.
-                                                - Limpieza física ('fs-format') con inyección directa de ceros en sectores virtio-blk.
+20  Desmantelamiento del Monolito       ✅      - Troceado completo de kernel.c (reducido de 109 KB a 92 lineas de bootstrap).
+    y Modularizacion del Kernel                 - Creacion de modulos limpios y desacoplados (<350 lineas cada uno):
+                                                  * src/rtc.h & src/rtc.c       (Reloj CMOS RTC)
+                                                  * src/nano.h & src/nano.c     (Editor de texto interactivo)
+                                                  * src/agent.h & src/agent.c   (Agente ReAct, memoria y puente host)
+                                                  * src/shell.h & src/shell.c   (Shell Readline, somafetch y coreutils)
+
+21  Blindaje CPU Ring 0 (TSS / IST1)    ✅      - Implementacion formal de TSS (Task State Segment) de 64 bits en selector 0x18.
+    y Resiliencia Fisico-Logica                 - Pila de emergencia de 16 KiB (IST1) configurada en la IDT para Double Fault (#DF,
+                                                  vector 8) y Page Fault (#PF, vector 14): erradicacion total de Triple Faults mudos.
+                                                - Pánico observable por el host con 'qemu_exit(0x23)' interceptado en ejecutar.py.
+                                                - Aislamiento de rutas efimeras (/sys/ y /tmp/): telemetria de fondo en RAM con
+                                                  cero desgaste fisico de disco (Inodos dirty pendientes: 0).
+
+22  Tabla Declarativa de Comandos       ✅      - Erradicacion total de las cadenas de 'if (cmd[0]...)': tabla canónica
+    y Saneamiento TCP en Multitarea             'struct command_entry cmd_table[]' unificada para los 61 comandos del kernel.
+                                                - Asignación de 'owner_tid' en conexiones TCP y recolección forzada con RST
+                                                  en 'thread_exit' y 'thread_kill' (cero fugas de sockets).
+
+23  VFS V2: Pseudo-Filesystems          ✅      - Implementación de pseudo-filesystems '/proc/' y '/dev/' evaluados al vuelo.
+    /proc/ y /dev/ Dinámicos en RAM             - Telemetría en vivo: /proc/version, /proc/uptime, /proc/meminfo, /proc/cpuinfo,
+                                                  /proc/threads, /proc/net/dev y /proc/net/arp accesibles con 'cat', 'grep', 'head'.
+                                                - Dispositivos virtuales: /dev/null, /dev/zero, /dev/urandom (entropía TSC) y /dev/rtc.
+
+24  Tuberias IPC Bare-Metal             ✅      - Operador de canalización '|' en la shell para composición de comandos Unix.
+    y Coreutils Composables                     - Coreutils adaptados a stdin dinámico: 'grep', 'wc', 'head', 'tail', 'hexdump'.
+
+25  Variables de Entorno Bare-Metal     ✅      - Subsistema de variables de entorno: 'env', 'export' y 'unset'.
+    y Filtro Grep Case-Insensitive              - Variables predeterminadas: $USER=marcos, $HOST=soma-node1, $ARCH, $OS, $PWD.
+                                                  Expansión automática de '$VAR' en comandos, tuberías y redirecciones.
+
+26  Shell Scripting Bare-Metal          ✅      - Intérprete secuencial de scripts por lotes: 'source <script.sh>' y alias 'sh'.
+    y Arranque Automático /etc/init.sh          - Encadenador secuencial de comandos ';' y ejecución transparente de /etc/init.sh.
+
+27  Operadores Lógicos '&&' y '||'      ✅      - Operadores condicionales de flujo: 'cmd1 && cmd2' y 'cmd1 || cmd2' en la shell.
+    e Historial Persistente en Disco            - Comando 'history' con numeración y persistencia en '/etc/history.txt' de RamFS.
+
+28  Servidor Web HTTP Bare-Metal        ✅      - Implementación de estado TCP_LISTEN y TCP_SYN_RCVD en tcp.c (RFC 793 pasivo).
+    (httpd Daemon en Ring 0)                    - Demonio de kernel 'httpd' (TID 4) escuchando en puerto 80 nativo.
+                                                - Dashboard web interactivo HTML servido a http://localhost:8090/ en el host.
+
+29  Soporte Multi-Arquitectura AArch64  ✅      - Toolchain cruzado aarch64-linux-gnu-gcc integrado en Dockerfile.
+    (Cortex-A72 / QEMU 'virt')                  - Implementación de boot.s, switch.s y rtc.c específicos para ARM64.
+                                                - Adaptación de VirtIO MMIO (blk y net) y contadores virtuales cntvct_el0.
+
+30  Vector Table VBAR_EL1 y Alineación  ✅      - Tabla vectorial de excepciones ARM64 VBAR_EL1 con volcado de Kernel Panic.
+    Estricta de Estructuras (Alignment)         - Erradicación total de Alignment Faults en memoria Device mediante
+                                                  alineación estricta de estructuras (`__attribute__((aligned))`).
+                                                - Arranque exitoso del prompt interactivo `soma>` en AArch64.
+
+31  Arquitectura ReAct Totipotencial    ✅      - Erradicación de anclajes heurísticos y reglas artificiales sobreajustadas.
+    y Metabuscador Web Universal                - Proxy de búsqueda (`search_proxy.py`) 100% universal y agnóstico a temáticas
+                                                  (Wikipedia API, RSS prensa y DDG Lite con ponderación por densidad de términos).
+                                                - Desglose limpio de tareas compuestas: búsqueda web -> síntesis cognitiva ->
+                                                  persistencia física obligatoria (`write`) -> verificación -> dictamen final.
+
+32  Motor Semantico BM25 y Workspace    ✅      - Motor BM25 bare-metal en C con normalizacion diacritica UTF-8 (á->a, ñ->n),
+    Jerarquico Multi-Agente                     filtrado de stop-words y ranking por densidad de terminos.
+                                                - Espacios de trabajo estructurados (/workspace/ y /mis_archivos/) y visibilidad con 'ls -a'.
+                                                - Orquestacion y delegacion jerarquica multi-agente ('delegate') con pizarra compartida.
+                                                - Aislamiento dinamico de buffers de prompt y contextos ReAct en el KHeap.
+
+33  Escalado RamFS V2 de Alta Capacidad ✅      - VFS V2 ampliado a 64 inodos dinamicos desacoplados en KHeap (0x20000000).
+                                                - Capacidad por archivo cuadruplicada a 16 KiB (16.384 bytes) con layout de 33 LBA por inodo.
+                                                - Cero presion sobre la ventana de 1 MiB del linker x86_64 (.bss desacoplado).
+                                                - Firma SOMAFS02 persistente y reubicacion segura de sectores de scratch a LBA 3500.
+
+34  Dashboard Web Ring 0 (HTTPD V2)     ✅      - Servidor web interactivo HTML5/REST en Ring 0 en puerto 80 (http://localhost:8090/).
+    y Buffers de Comando Masivos                - Explorador visual de archivos (/workspace/, /mis_archivos/) y visor de Blackboard.
+                                                - Endpoints REST JSON (/api/telemetry, /api/fs, /api/blackboard) servidos bare-metal.
+                                                - Expansion de buffers de comando a 8 KiB (escritura de archivos hasta 16 KiB sin cortes).
+                                                - Manejador dual ReAct (ejecucion 'write' pre-final) y erradicacion de JSON crudo.
 
 ================================================================================
-PRÓXIMOS PASOS (HOJA DE RUTA PARA LA SIGUIENTE SESIÓN)
+HOJA DE RUTA PARA LA SIGUIENTE SESION
 ================================================================================
 
-1. Ejecución del Puerto Bare-Metal ARM64 (QEMU virt & Raspberry Pi 4):
-   --------------------------------------------------------------------
-   - Incorporar toolchain cruzado 'gcc-aarch64-linux-gnu' en el Dockerfile.
-   - Implementar el subárbol src/arch/aarch64/ (boot.s, switch.s, timer cntvct_el0, UART PL011).
-   - Arrancar MYOS sobre 'qemu-system-aarch64 -machine virt -cpu cortex-a72' reutilizando
-     íntegramente toda la pila TCP/IP, RamFS, el asignador y el bucle ReAct del Agente.
-   ------------------------------------------------------------------
-   - Reestructurar el árbol de código:
-       * src/arch/x86_64/ (boot.s, switch.s, idt.*, pmm/vmm específicos)
-       * src/arch/aarch64/ (arranque bare-metal ARMv8-A en EL1, UART PL011, timer cntvct_el0)
-   - Mantener el 80% del código en C agnóstico a la arquitectura (TCP/IP, HTTP, RamFS,
-     Agente ReAct, VFS, Memory allocator y Kthreads cooperativos).
-   - Dockerfile con compilador cruzado 'gcc-aarch64-linux-gnu' y emulación en QEMU ('qemu-system-aarch64').
-   - Meta final: Arrancar MYOS bare-metal en una placa Raspberry Pi 4.
+1. Pruebas de estrés y validación de la suite multiagente en arquitectura AArch64 (Cortex-A72).
+2. Soporte de sockets cliente TCP paralelos y ampliación de concurrencia en httpd.
+3. Optimización del driver de Framebuffer para salida gráfica HDMI en Raspberry Pi 4.
 ================================================================================

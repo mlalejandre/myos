@@ -8,7 +8,9 @@ RUN apt-get update && \
         grub-pc-bin \
         grub-common \
         xorriso \
-        mtools && \
+        mtools \
+        gcc-aarch64-linux-gnu \
+        binutils-aarch64-linux-gnu && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /myos
+WORKDIR /soma

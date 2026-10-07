@@ -90,8 +90,8 @@ int boot_gate_run_test_suite(char *out_buf, uint32_t max_out)
     static uint8_t sec_r[512] __attribute__((aligned(16)));
     for (int i = 0; i < 512; ++i) sec_w[i] = (uint8_t)(i ^ 0x5A);
     memcpy(sec_w, "MYOS_SYSTEM_SUITE_SECTOR_2048", 29);
-    if (virtio_blk_write(2048, sec_w) != 0 ||
-        virtio_blk_read(2048, sec_r) != 0 ||
+    if (virtio_blk_write(3500, sec_w) != 0 ||
+        virtio_blk_read(3500, sec_r) != 0 ||
         memcmp(sec_w, sec_r, 512) != 0) {
         kprint("FALLO\n");
         bg_puts(out_buf, max_out, &pos, "- VirtIO-BLK: FALLO\n");
@@ -188,7 +188,7 @@ void boot_gate_check(void)
     /* 2. Comprobacion de lectura y escritura en virtio-blk */
     static char canary_io[512] __attribute__((aligned(16)));
     memcpy(canary_io, "MYOS_CANARY_PROBE", 17);
-    if (virtio_blk_write(2048, canary_io) != 0 || virtio_blk_read(2048, canary_io) != 0) {
+    if (virtio_blk_write(3500, canary_io) != 0 || virtio_blk_read(3500, canary_io) != 0) {
         kprint("[PUERTA DE ARRANQUE] FALLO: I/O en disco virtio-blk no responde.\n");
         qemu_exit(0x22);
     }

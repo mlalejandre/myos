@@ -1,32 +1,40 @@
-CC = gcc
-LD = ld
+ARCH ?= x86_64
 
-BUILD = build
+ifeq ($(ARCH),x86_64)
+	CC = gcc
+	LD = ld
+	PLATFORM ?= qemu_virt
+CFLAGS = -DPLATFORM_$(PLATFORM) -m64 -march=x86-64 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pie -fno-pic -mno-red-zone -mgeneral-regs-only
+else
+	CC = aarch64-linux-gnu-gcc
+	LD = aarch64-linux-gnu-ld
+	PLATFORM ?= qemu_virt
+CFLAGS = -DPLATFORM_$(PLATFORM) -march=armv8-a -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -fno-pie -fno-pic -mgeneral-regs-only -mstrict-align
+endif
 
-CFLAGS = \
-	-m64 \
-	-march=x86-64 \
-	-ffreestanding \
-	-O2 \
-	-Wall \
-	-Wextra \
-	-fno-stack-protector \
-	-fno-pie \
-	-fno-pic \
-	-mno-red-zone \
-	-mgeneral-regs-only
+BUILD = build/$(ARCH)
+CFLAGS += -Isrc -Isrc/arch/$(ARCH)
 
-OBJS = \
+OBJS_ARCH = \
 	$(BUILD)/boot.o \
 	$(BUILD)/switch.o \
+	$(BUILD)/idt.o \
+	$(BUILD)/pci.o \
+	$(BUILD)/rtc.o \
+	$(BUILD)/sysinfo.o \
+	$(BUILD)/pmm.o \
+	$(BUILD)/vmm.o
+
+ifeq ($(ARCH),aarch64)
+OBJS_ARCH += $(BUILD)/rpi_fb.o
+endif
+
+OBJS_CORE = \
 	$(BUILD)/thread.o \
 	$(BUILD)/mutex.o \
 	$(BUILD)/kernel.o \
 	$(BUILD)/mem.o \
-	$(BUILD)/pmm.o \
-	$(BUILD)/vmm.o \
 	$(BUILD)/console.o \
-	$(BUILD)/pci.o \
 	$(BUILD)/virtio_net.o \
 	$(BUILD)/net.o \
 	$(BUILD)/ip.o \
@@ -35,49 +43,54 @@ OBJS = \
 	$(BUILD)/tcp.o \
 	$(BUILD)/http.o \
 	$(BUILD)/llm.o \
-	$(BUILD)/sysinfo.o \
 	$(BUILD)/fs.o \
 	$(BUILD)/virtio_blk.o \
 	$(BUILD)/srcfs.o \
-	$(BUILD)/idt.o \
-	$(BUILD)/boot_gate.o
+	$(BUILD)/boot_gate.o \
+	$(BUILD)/nano.o \
+	$(BUILD)/agent.o \
+	$(BUILD)/shell.o \
+	$(BUILD)/httpd.o
 
-HEADERS = $(wildcard src/*.h)
+OBJS = $(OBJS_ARCH) $(OBJS_CORE)
+HEADERS = $(wildcard src/*.h) $(wildcard src/arch/$(ARCH)/*.h)
 
 all: $(BUILD)/soma.iso
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/boot.o: src/boot.s | $(BUILD)
-	$(CC) -m64 -c $< -o $@
+$(BUILD)/boot.o: src/arch/$(ARCH)/boot.s | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/switch.o: src/switch.s | $(BUILD)
-	$(CC) -m64 -c $< -o $@
+$(BUILD)/switch.o: src/arch/$(ARCH)/switch.s | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: src/arch/$(ARCH)/%.c $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: src/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/soma.elf: $(OBJS) linker.ld
-	$(LD) -T linker.ld -o $@ $(OBJS)
+$(BUILD)/soma.elf: $(OBJS) linker_$(ARCH).ld
+	$(LD) -T linker_$(ARCH).ld -o $@ $(OBJS)
 
-$(BUILD)/isodir/boot/soma.elf: $(BUILD)/soma.elf grub/grub.cfg
+$(BUILD)/soma.iso: $(BUILD)/soma.elf
+ifeq ($(ARCH),x86_64)
 	mkdir -p $(BUILD)/isodir/boot/grub
-	cp $(BUILD)/soma.elf \
-		$(BUILD)/isodir/boot/soma.elf
-	cp grub/grub.cfg \
-		$(BUILD)/isodir/boot/grub/grub.cfg
-
-$(BUILD)/soma.iso: $(BUILD)/isodir/boot/soma.elf
-	grub-mkrescue \
-		-o $@ \
-		$(BUILD)/isodir
-
-	grub-file \
-		--is-x86-multiboot \
-		$(BUILD)/soma.elf
+	cp $(BUILD)/soma.elf $(BUILD)/isodir/boot/soma.elf
+	cp grub/grub.cfg $(BUILD)/isodir/boot/grub/grub.cfg
+	grub-mkrescue -o $@ $(BUILD)/isodir
+	grub-file --is-x86-multiboot $(BUILD)/soma.elf
+	cp $@ build/soma.iso
+	cp $(BUILD)/soma.elf build/soma.elf
+else
+	@echo "ISO not applicable for aarch64. Target is bare ELF."
+	touch $@
+	cp $(BUILD)/soma.elf build/soma.elf
+endif
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf build
 
 .PHONY: all clean

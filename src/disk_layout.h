@@ -2,7 +2,7 @@
 #define SOMA_DISK_LAYOUT_H
 
 /* ====================================================================
- * MAPA FÍSICO DE DISCO SOMA (Sectores LBA de 512 bytes en virtio-blk)
+ * MAPA FÍSICO DE DISCO SOMA V2 (Sectores LBA de 512 bytes en virtio-blk)
  * Capacidad total estándar: 16 MiB (32.768 sectores)
  * ==================================================================== */
 
@@ -14,21 +14,22 @@
 #define SOMA_LBA_BOOT_GATE      24     /* LBA 24: Flag de prueba canaria */
 #define SOMA_LBA_RESUME_FLAG    25     /* LBA 25: Flag de reanudación atómica */
 
-/* Zona 2: Fuentes del Sistema (SRCFS) */
-#define SOMA_LBA_SRCFS_INDEX    256    /* LBA 256..263: Índice de archivos (8 sectores) */
-#define SOMA_LBA_SRCFS_DATA     264    /* LBA 264..1023: Código fuente empaquetado */
-#define SOMA_LBA_SRCFS_LIMIT    1024
+/* Zona 2: Sistema de Archivos Persistente V2 (RamFS SOMAFS02) */
+#define SOMA_LBA_FS_SUPER       1024   /* LBA 1024: Superbloque del VFS */
+#define SOMA_LBA_FS_DATA        1025   /* LBA 1025..3137: 64 inodos x 33 sectores (16 KiB/archivo) */
+#define SOMA_LBA_FS_LIMIT       3138
 
-/* Zona 3: Sistema de Archivos Persistente (RamFS SOMAFS01) */
-#define SOMA_LBA_FS_SUPER       1024   /* Superbloque del VFS */
-#define SOMA_LBA_FS_DATA        1025   /* Inodos y bloques de datos (1025..2047) */
+/* Zona 3: Scratch del Sistema y Zona de Usuario */
+#define SOMA_LBA_SCRATCH_MIN    3500   /* LBA 3500..3508: Scratch para canary tests */
+#define SOMA_LBA_USER_MIN       3600   /* LBA >= 3600: Libre para usuario / sector_write */
 
-/* Zona 4: Scratch del Sistema y Zona de Usuario */
-#define SOMA_LBA_SCRATCH_MIN    2048   /* LBA 2048..2055: Scratch para tests canarios */
-#define SOMA_LBA_USER_MIN       2056   /* LBA >= 2056: Libre para el usuario/IA */
+/* Zona 4: Checkpoints de Hardware */
+#define SOMA_LBA_CHECKPOINT     4096   /* LBA 4096..6210: Checkpoint de respaldo RamFS */
+#define SOMA_LBA_CHECKPOINT_END 6210
 
-/* Zona 5: Checkpoints de Hardware */
-#define SOMA_LBA_CHECKPOINT     4095   /* LBA 4095..4400: Checkpoint de respaldo RamFS */
-#define SOMA_LBA_CHECKPOINT_END 4400
+/* Zona 5: Fuentes del Sistema (SRCFS) */
+#define SOMA_LBA_SRCFS_INDEX    8192   /* LBA 8192..8199: Índice de fuentes (8 sectores) */
+#define SOMA_LBA_SRCFS_DATA     8200   /* LBA 8200..16383: Fuentes empaquetadas (4 MiB) */
+#define SOMA_LBA_SRCFS_LIMIT    16384
 
 #endif

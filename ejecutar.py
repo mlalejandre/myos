@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SOMA DEVELOPMENT RUNNER - THE SINGULARITY LOOP (v2)
+# SOMA DEVELOPMENT RUNNER - THE SINGULARITY LOOP (v2 Multi-Arch)
 #
 # Protocolo del buzon (LBA 1..16, 8 KiB):
 #   [0..7]  "PATCHv02"
@@ -22,15 +22,16 @@ import subprocess
 import time
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "tools"))
 import llm_server
+import search_proxy
 
 ROOT = Path(__file__).resolve().parent
 BUILD_DIR = ROOT / "build"
 SRC_DIR = ROOT / "src"
 BACKUP_DIR = ROOT / "build_backup_src"
 HDD = ROOT / "hdd.img"
-DOCKER_IMAGE = "myos-toolchain"
-QEMU = "qemu-system-x86_64"
+DOCKER_IMAGE = "soma-toolchain"
 
 SECTOR = 512
 MAILBOX_LBA = 1
@@ -43,7 +44,8 @@ RESULT_SIZE = 2048
 BOOT_GATE_LBA = 24
 QEMU_EXIT_GATE_OK = (0x20 << 1) | 1    # 0x41 = 65
 QEMU_EXIT_GATE_FAIL = (0x22 << 1) | 1  # 0x45 = 69
-QEMU_EXIT_PATCH = (0x10 << 1) | 1   # qemu_exit(0x10) -> codigo de proceso 0x21
+QEMU_EXIT_PANIC = (0x23 << 1) | 1      # 0x47 = 71
+QEMU_EXIT_PATCH = (0x10 << 1) | 1      # qemu_exit(0x10) -> codigo 0x21
 
 ALLOWED_EXT = {".c", ".h", ".s"}
 FILE_RE = re.compile(
@@ -87,10 +89,10 @@ def git_snapshot(message: str) -> None:
     git("commit", "-m", message)
 
 
-def build(uid: str, gid: str) -> tuple[int, str]:
+def build(uid: str, gid: str, arch: str = "x86_64") -> tuple[int, str]:
     cmd = ["docker", "run", "--rm", "--platform", "linux/amd64",
-           "-u", f"{uid}:{gid}", "-v", f"{ROOT}:/myos", DOCKER_IMAGE, "make"]
-    print(f"\n{'=' * 72}\nCOMPILANDO SOMA BARE-METAL\n{'=' * 72}\n\n$ {' '.join(cmd)}\n")
+           "-u", f"{uid}:{gid}", "-v", f"{ROOT}:/soma", DOCKER_IMAGE, "make", f"ARCH={arch}"]
+    print(f"\n{'=' * 72}\nCOMPILANDO SOMA BARE-METAL ({arch})\n{'=' * 72}\n\n$ {' '.join(cmd)}\n")
     p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     out = (p.stdout or "") + (p.stderr or "")
     print(out)
@@ -106,7 +108,6 @@ def summarize_errors(out: str, limit: int = 6) -> list[str]:
 # ---------------------------------------------------------------- buzon
 
 def read_mailbox() -> tuple[str | None, str]:
-    # Devuelve (estado, texto). estado: None (sin peticion), "v1", "bad", "ok".
     if not HDD.exists():
         return None, ""
     with open(HDD, "rb") as f:
@@ -184,7 +185,7 @@ def is_target_protected(path: Path) -> bool:
 def safe_target(name: str) -> Path | None:
     if "\x00" in name:
         return None
-    p = (ROOT / name).resolve()          # resuelve '..' y symlinks
+    p = (ROOT / name).resolve()
     src = SRC_DIR.resolve()
     if p.is_relative_to(src) and p.suffix.lower() in ALLOWED_EXT and p.is_file():
         if is_target_protected(p):
@@ -195,7 +196,6 @@ def safe_target(name: str) -> Path | None:
 
 
 def compute_patch(text: str):
-    # Devuelve ({Path: (viejo, nuevo)}, None) o (None, mensaje_de_error).
     text = text.replace("\r\n", "\n")
     sections = FILE_RE.findall(text)
     if not sections:
@@ -257,10 +257,8 @@ def apply_changes(changes) -> None:
     shutil.rmtree(BACKUP_DIR, ignore_errors=True)
     shutil.copytree(SRC_DIR, BACKUP_DIR)
     for p, (_, new) in changes.items():
-        # Invalidar inodo en macOS VirtioFS borrando antes de escribir
         p.unlink(missing_ok=True)
         p.write_text(new, encoding="utf-8")
-    # Pausa de sincronizacion para que la cache de Docker en macOS actualice st_size
     time.sleep(0.6)
 
 
@@ -270,7 +268,6 @@ def restore_src() -> None:
 
 
 def handle_mailbox(approve: bool) -> bool | None:
-    # None = no hubo peticion; True = parche aplicado; False = rechazado.
     state, text = read_mailbox()
     if state is None:
         return None
@@ -313,21 +310,28 @@ def handle_mailbox(approve: bool) -> bool | None:
     return True
 
 
-# ---------------------------------------------------------------- main
-
 # ---------------------------------------------------------------- SRCFS
-# Empaqueta src/*.c|h|s en hdd.img para que la IA los lea con src_ls/src_cat/src_grep.
-# Indice en LBA 256..263 (entradas de 64 bytes), datos desde LBA 264, todo < LBA 1024.
 
-SRCFS_LBA = 256
+SRCFS_LBA = 8192
 SRCFS_INDEX_SECTORS = 8
 SRCFS_ENTRY = 64
-SRCFS_LIMIT_LBA = 1024
+SRCFS_LIMIT_LBA = 16384
+
+
+# PARCHE 047: el indice SRCFS solo admite 63 entradas; no empaquetar la otra arquitectura.
+PACK_ARCH = None
+
+
+def _otra_arch(p: Path) -> bool:
+    if PACK_ARCH is None:
+        return False
+    parts = p.relative_to(SRC_DIR).parts
+    return len(parts) >= 2 and parts[0] == "arch" and parts[1] != PACK_ARCH
 
 
 def pack_sources() -> None:
-    files = sorted(p for p in SRC_DIR.iterdir()
-                   if p.is_file() and p.suffix.lower() in ALLOWED_EXT)
+    files = sorted(p for p in SRC_DIR.rglob("*")
+                   if p.is_file() and p.suffix.lower() in ALLOWED_EXT and not _otra_arch(p))
     max_entries = SRCFS_INDEX_SECTORS * SECTOR // SRCFS_ENTRY - 1
     if len(files) > max_entries:
         print(f"[SRCFS] AVISO: {len(files)} archivos; solo caben {max_entries}")
@@ -341,7 +345,8 @@ def pack_sources() -> None:
     blobs = []
     for i, p in enumerate(files, 1):
         data = p.read_bytes()
-        name = p.name.encode("utf-8")[:47]
+        rel_path = str(p.relative_to(SRC_DIR)).replace("\\", "/")
+        name = rel_path.encode("utf-8")[:47]
         off = i * SRCFS_ENTRY
         index[off:off + len(name)] = name
         index[off + 48:off + 52] = lba.to_bytes(4, "little")
@@ -350,8 +355,9 @@ def pack_sources() -> None:
         lba += (len(data) + SECTOR - 1) // SECTOR
 
     if lba > SRCFS_LIMIT_LBA:
-        print(f"[SRCFS] ERROR: las fuentes ocupan hasta LBA {lba} (limite {SRCFS_LIMIT_LBA}); no se empaquetan")
-        return
+        print(f"[SRCFS] AVISO: las fuentes ocupan hasta LBA {lba} (limite {SRCFS_LIMIT_LBA}); truncando empaquetado seguro.")
+        # Ajustar para escribir solo hasta el límite seguro sin colisionar con RamFS
+        lba = SRCFS_LIMIT_LBA
 
     with open(HDD, "rb+") as f:
         f.seek(SRCFS_LBA * SECTOR)
@@ -362,8 +368,70 @@ def pack_sources() -> None:
     print(f"[SRCFS] {len(files)} fuentes empaquetadas en LBA {SRCFS_LBA}..{lba - 1}")
 
 
+# ---------------------------------------------------------------- main
+
+def choose_arch() -> str:
+    print("\nPlataforma de destino:")
+    print("  1) x86_64   [Intel / AMD - PC estándar con GRUB / ISO]")
+    print("  2) aarch64  [ARM64 - Cortex-A72 / QEMU virt ELF]")
+    while True:
+        try:
+            choice = input("\nElige plataforma [1-2, Enter=1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return "x86_64"
+        if choice in ("", "1"):
+            return "x86_64"
+        if choice == "2":
+            return "aarch64"
+        print("Opción no válida. Introduce 1 o 2.")
+
+
+def get_qemu_commands(arch: str) -> tuple[str, list[str], list[str]]:
+    if arch == "x86_64":
+        qemu_bin = "qemu-system-x86_64"
+        canary = [
+            qemu_bin, "-machine", "pc", "-m", "256M", "-no-reboot",
+            "-cdrom", "build/soma.iso", "-netdev", "user,id=net0,hostfwd=tcp::8090-:80",
+            "-device", "virtio-net-pci,netdev=net0",
+            "-drive", "file=hdd.img,format=raw,if=virtio",
+            "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+            "-serial", "stdio", "-display", "none",
+        ]
+        main_cmd = [
+            qemu_bin, "-machine", "pc", "-m", "256M", "-no-reboot", "-d", "guest_errors,cpu_reset", "-D", "build/qemu.log",
+            "-cdrom", "build/soma.iso", "-netdev", "user,id=net0,hostfwd=tcp::8090-:80", "-device", "virtio-net-pci,netdev=net0",
+            "-drive", "file=hdd.img,format=raw,if=virtio",
+            "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+            "-object", "filter-dump,id=f1,netdev=net0,file=build/net.pcap",
+            "-serial", "stdio",
+        ]
+    else:  # aarch64 – virtio-mmio (más simple y fiable en QEMU virt)
+        qemu_bin = "qemu-system-aarch64"
+        canary = [
+            qemu_bin, "-M", "virt", "-cpu", "cortex-a72", "-m", "256M", "-no-reboot", "-semihosting",
+            "-kernel", "build/aarch64/soma.elf",
+            "-netdev", "user,id=net0,hostfwd=tcp::8090-:80",
+            "-device", "virtio-net-device,netdev=net0",
+            "-drive", "file=hdd.img,format=raw,if=none,id=hd0",
+            "-device", "virtio-blk-device,drive=hd0",
+            "-serial", "stdio", "-display", "none",
+        ]
+        main_cmd = [
+            qemu_bin, "-M", "virt", "-cpu", "cortex-a72", "-m", "256M", "-no-reboot", "-semihosting",
+            "-kernel", "build/aarch64/soma.elf",
+            "-netdev", "user,id=net0,hostfwd=tcp::8090-:80",
+            "-device", "virtio-net-device,netdev=net0",
+            "-drive", "file=hdd.img,format=raw,if=none,id=hd0",
+            "-device", "virtio-blk-device,drive=hd0",
+            "-serial", "stdio",
+        ]
+    return qemu_bin, canary, main_cmd
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="SOMA runner (Singularity Loop v2)")
+    ap = argparse.ArgumentParser(description="SOMA runner (Singularity Loop v2 Multi-Arch)")
+    ap.add_argument("-a", "--arch", choices=["x86_64", "aarch64"], default=None,
+                    help="arquitectura objetivo (x86_64 o aarch64)")
     ap.add_argument("--aprobar", action="store_true",
                     help="mostrar el diff y pedir confirmacion antes de aplicar")
     ap.add_argument("--max-ciclos", type=int, default=10,
@@ -375,6 +443,7 @@ def main() -> int:
     ap.add_argument("--snapshots", action="store_true",
                     help="lista todos los snapshots guardados")
     llm_server.add_arguments(ap)
+    search_proxy.add_arguments(ap)
     args = ap.parse_args()
 
     SNAPSHOT_DIR = ROOT / "snapshots"
@@ -413,8 +482,20 @@ def main() -> int:
         return 0
 
     print("\n" + "=" * 72 + "\nSOMA DEVELOPMENT RUNNER - THE SINGULARITY LOOP v2\n" + "=" * 72 + "\n")
-    if not shutil.which("docker") or not shutil.which(QEMU):
-        print("ERROR: Faltan dependencias (Docker o QEMU).")
+
+    # Selección de arquitectura (CLI o Interactiva)
+    if args.arch:
+        arch = args.arch
+    elif sys.stdin.isatty():
+        arch = choose_arch()
+    else:
+        arch = "x86_64"
+
+    qemu_bin, canary_cmd, qemu_command = get_qemu_commands(arch)
+    globals()["PACK_ARCH"] = arch
+
+    if not shutil.which("docker") or not shutil.which(qemu_bin):
+        print(f"ERROR: Faltan dependencias (Docker o {qemu_bin}).")
         return 1
 
     if not docker_image_exists():
@@ -429,6 +510,7 @@ def main() -> int:
             f.write(b"\x00" * (16 * 1024 * 1024))
 
     llm_server.ensure_server(args)
+    search_proxy.ensure_proxy(args)
 
     patched = False
     cycles = 0
@@ -443,7 +525,7 @@ def main() -> int:
             shutil.rmtree(BUILD_DIR)
         BUILD_DIR.mkdir(exist_ok=True)
 
-        code, out = build(uid, gid)
+        code, out = build(uid, gid, arch)
 
         if code != 0:
             if patched:
@@ -459,19 +541,14 @@ def main() -> int:
 
         if patched:
             print("\n" + "=" * 72)
-            print("PUERTA DE ARRANQUE: PROBANDO KERNEL EN MODO CANARY")
+            print(f"PUERTA DE ARRANQUE: PROBANDO KERNEL ({arch}) EN MODO CANARY")
             print("=" * 72)
+            precanary = HDD.with_name(HDD.name + ".checkpoint_precanary")
+            shutil.copy2(HDD, precanary)
+            print(f"[REPRODUCIBILIDAD] Disco guardado antes del canary: {precanary.name}")
             pack_sources()
             arm_boot_gate()
 
-            canary_cmd = [
-                QEMU, "-machine", "pc", "-m", "256M", "-no-reboot",
-                "-cdrom", "build/soma.iso", "-netdev", "user,id=net0",
-                "-device", "virtio-net-pci,netdev=net0",
-                "-drive", "file=hdd.img,format=raw,if=virtio",
-                "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
-                "-serial", "stdio", "-display", "none",
-            ]
             print("$ " + " ".join(canary_cmd) + "\n")
             try:
                 canary_rc = subprocess.run(canary_cmd, cwd=ROOT, timeout=45).returncode
@@ -491,6 +568,8 @@ def main() -> int:
                 print(f"\n[BOOT-GATE FAIL] El kernel fallo en el arranque (rc={canary_rc}).")
                 print("[ROLLBACK] Restaurando src/ a la version sana anterior...")
                 restore_src()
+                shutil.copy2(precanary, HDD)
+                print("[ROLLBACK] Disco hdd.img restaurado al estado previo al canary.")
                 write_result("BOOT_FAILED (rollback aplicado)", f"canary_rc={canary_rc}")
                 arm_agent_resume()
                 patched = False
@@ -498,16 +577,7 @@ def main() -> int:
 
         pack_sources()
 
-        qemu_command = [
-            QEMU, "-machine", "pc", "-m", "256M", "-no-reboot", "-d", "guest_errors,cpu_reset", "-D", "build/qemu.log",
-            "-cdrom", "build/soma.iso", "-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0",
-            "-drive", "file=hdd.img,format=raw,if=virtio",
-            "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
-            "-object", "filter-dump,id=f1,netdev=net0,file=build/net.pcap",
-            "-serial", "stdio",
-        ]
-
-        print("\n" + "=" * 72 + "\nARRANCANDO SOMA BARE-METAL\n" + "=" * 72 + "\n")
+        print("\n" + "=" * 72 + f"\nARRANCANDO SOMA BARE-METAL ({arch})\n" + "=" * 72 + "\n")
         try:
             rc = subprocess.run(qemu_command, cwd=ROOT).returncode
         except KeyboardInterrupt:
@@ -517,6 +587,8 @@ def main() -> int:
         outcome = handle_mailbox(args.aprobar)
 
         if outcome is None:
+            if rc == QEMU_EXIT_PANIC:
+                print("\n[HOST MONITOR] !!! KERNEL PANIC DETECTADO EN EL GUEST (exit 0x23) !!!\n")
             if rc == QEMU_EXIT_PATCH:
                 print("AVISO: el kernel pidio un parche (exit 0x21) pero el buzon esta vacio o corrupto.")
             print(">>> QEMU cerrado sin peticion de auto-modificacion. Fin del script.")

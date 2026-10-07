@@ -1,38 +1,25 @@
-# Build outputs
 build/
 isodir/
 *.o
 *.elf
 *.iso
 *.bin
-*.img
-
-# Network capture & logs
 *.pcap
 *.log
 qemu.log
-
-# Python cache
 __pycache__/
 *.py[cod]
-
-# OS / Editor files
 .DS_Store
 ._*
 .vscode/
 .idea/
 *.swp
 *~
-
-# Auto-generated structure dumps
 estructura_proyecto.txt
-
-# Parches de la IA
 build_backup_src/
 .parche_backup/
-
-# Snapshots y checkpoints de disco (16 MiB cada uno)
+.backup_*/
+.parches_backup/
 snapshots/
 hdd.img.checkpoint*
 *.checkpoint_*
-.parches_backup/

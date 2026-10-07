@@ -8,7 +8,7 @@ import mimetypes
 # Configuración
 # ------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_FILE = PROJECT_ROOT / "estructura_proyecto.txt"
 
 # Directorios que normalmente no necesitamos incluir.

@@ -22,6 +22,33 @@ static int      ansi_arg1 = 0;
 static int      ansi_arg2 = 0;
 static int      ansi_has_arg2 = 0;
 
+/* Decodificador UTF-8 -> CP437 para renderizado en pantalla VGA */
+static uint32_t vga_utf8_state = 0;
+static uint32_t vga_utf8_cp = 0;
+
+static uint8_t utf8_to_cp437(uint32_t cp)
+{
+    switch (cp) {
+        case 0x00E1: return 0xA0; /* á */
+        case 0x00E9: return 0x82; /* é */
+        case 0x00ED: return 0xA1; /* í */
+        case 0x00F3: return 0xA2; /* ó */
+        case 0x00FA: return 0xA3; /* ú */
+        case 0x00C1: return 'A';  /* Á */
+        case 0x00C9: return 0x90; /* É */
+        case 0x00CD: return 'I';  /* Í */
+        case 0x00D3: return 'O';  /* Ó */
+        case 0x00DA: return 'U';  /* Ú */
+        case 0x00F1: return 0xA4; /* ñ */
+        case 0x00D1: return 0xA5; /* Ñ */
+        case 0x00BF: return 0xA8; /* ¿ */
+        case 0x00A1: return 0xAD; /* ¡ */
+        case 0x00FC: return 0x81; /* ü */
+        case 0x00DC: return 0x9A; /* Ü */
+        default:     return (cp < 128) ? (uint8_t)cp : '?';
+    }
+}
+
 static void vga_update_cursor(void)
 {
     uint16_t pos = (uint16_t)(vga_row * 80 + vga_col);
@@ -46,6 +73,33 @@ static void vga_scroll(void)
 
 static void vga_putc(char c)
 {
+    /* Manejo de secuencias multibyte UTF-8 */
+    uint8_t uc = (uint8_t)c;
+    if (uc >= 0x80) {
+        if ((uc & 0xE0) == 0xC0) {
+            vga_utf8_cp = uc & 0x1F;
+            vga_utf8_state = 1;
+            return;
+        } else if ((uc & 0xF0) == 0xE0) {
+            vga_utf8_cp = uc & 0x0F;
+            vga_utf8_state = 2;
+            return;
+        } else if ((uc & 0xC0) == 0x80 && vga_utf8_state > 0) {
+            vga_utf8_cp = (vga_utf8_cp << 6) | (uc & 0x3F);
+            vga_utf8_state--;
+            if (vga_utf8_state == 0) {
+                c = (char)utf8_to_cp437(vga_utf8_cp);
+            } else {
+                return;
+            }
+        } else {
+            vga_utf8_state = 0;
+            return;
+        }
+    } else {
+        vga_utf8_state = 0;
+    }
+
     if (ansi_state == 0) {
         if ((uint8_t)c == 27) {
             ansi_state = 1;
@@ -109,7 +163,7 @@ static void vga_putc(char c)
             vga_col--;
             VGA_BUF[vga_row * 80 + vga_col] = (uint16_t)((vga_attr << 8) | ' ');
         }
-    } else if ((uint8_t)c >= 32 && (uint8_t)c < 127) {
+    } else if ((uint8_t)c >= 32) {
         VGA_BUF[vga_row * 80 + vga_col] = (uint16_t)((vga_attr << 8) | (uint8_t)c);
         vga_col++;
         if (vga_col >= 80) {
@@ -348,7 +402,7 @@ char kgetc(void)
 }
 
 #define CMD_HISTORY_MAX 16
-#define CMD_LINE_MAX    512
+/* CMD_LINE_MAX definido en console.h (4096) */
 
 static char cmd_history[CMD_HISTORY_MAX][CMD_LINE_MAX];
 static int history_count = 0;
@@ -431,6 +485,17 @@ static int read_key_action(void)
     return (int)(uint8_t)c;
 }
 
+static uint32_t utf8_vis_len(const char *s, uint32_t byte_len)
+{
+    uint32_t vis = 0;
+    for (uint32_t i = 0; i < byte_len; ++i) {
+        if (((uint8_t)s[i] & 0xC0) != 0x80) {
+            vis++;
+        }
+    }
+    return vis;
+}
+
 static void redraw_prompt_line(const char *line, uint32_t len, uint32_t cursor, uint32_t prev_len)
 {
     kputc('\r');
@@ -440,13 +505,16 @@ static void redraw_prompt_line(const char *line, uint32_t len, uint32_t cursor, 
         kputc(line[i]);
     }
 
-    uint32_t max_v = len;
-    if (prev_len > len) {
-        for (uint32_t i = len; i < prev_len; ++i) kputc(' ');
-        max_v = prev_len;
+    uint32_t vis_len = utf8_vis_len(line, len);
+    uint32_t vis_prev = utf8_vis_len(line, prev_len);
+    uint32_t max_v = vis_len;
+    if (vis_prev > vis_len) {
+        for (uint32_t i = vis_len; i < vis_prev; ++i) kputc(' ');
+        max_v = vis_prev;
     }
 
-    uint32_t steps_back = max_v - cursor;
+    uint32_t vis_cursor = utf8_vis_len(line, cursor);
+    uint32_t steps_back = (max_v > vis_cursor) ? (max_v - vis_cursor) : 0;
     if (steps_back > 0) {
 #ifdef __x86_64__
         if (vga_col >= steps_back) vga_col -= steps_back;
@@ -491,11 +559,19 @@ int kgetline(char *buf, uint32_t max)
         if (act == KEY_ACT_BS) {
             if (cursor > 0) {
                 prev_len = len;
-                for (uint32_t i = cursor - 1; i < len; ++i) {
-                    line[i] = line[i + 1];
+                uint32_t del_bytes = 1;
+                /* Manejo de borrado atómico para caracteres UTF-8 multibyte */
+                if (((uint8_t)line[cursor - 1] & 0xC0) == 0x80) {
+                    while (cursor > del_bytes && ((uint8_t)line[cursor - del_bytes] & 0xC0) == 0x80) {
+                        del_bytes++;
+                    }
                 }
-                cursor--;
-                len--;
+                for (uint32_t i = cursor - del_bytes; i + del_bytes <= len; ++i) {
+                    line[i] = line[i + del_bytes];
+                }
+                cursor -= del_bytes;
+                len -= del_bytes;
+                line[len] = '\0';
                 redraw_prompt_line(line, len, cursor, prev_len);
             }
             continue;
@@ -504,6 +580,7 @@ int kgetline(char *buf, uint32_t max)
         if (act == KEY_ACT_LEFT) {
             if (cursor > 0) {
                 cursor--;
+                while (cursor > 0 && ((uint8_t)line[cursor] & 0xC0) == 0x80) cursor--;
                 prev_len = len;
                 redraw_prompt_line(line, len, cursor, prev_len);
             }
@@ -513,6 +590,7 @@ int kgetline(char *buf, uint32_t max)
         if (act == KEY_ACT_RIGHT) {
             if (cursor < len) {
                 cursor++;
+                while (cursor < len && ((uint8_t)line[cursor] & 0xC0) == 0x80) cursor++;
                 prev_len = len;
                 redraw_prompt_line(line, len, cursor, prev_len);
             }
@@ -625,7 +703,8 @@ int kgetline(char *buf, uint32_t max)
             continue;
         }
 
-        if ((uint8_t)act >= 32 && (uint8_t)act < 127) {
+        /* Admisión de caracteres ASCII y bytes UTF-8 (>= 32) */
+        if ((uint8_t)act >= 32) {
             if (len < sizeof(line) - 2) {
                 if (cursor == len) {
                     line[len] = (char)act;

@@ -12,7 +12,7 @@
  *                 Entradas 1..count: char name[48]; u32 lba; u32 size; pad[8].
  *   LBA 264..     datos, cada archivo alineado a sector.
  */
-#define SRCFS_LBA            256
+#define SRCFS_LBA            8192
 #define SRCFS_INDEX_SECTORS  8
 #define SRCFS_ENTRY_SIZE     64
 #define SRCFS_NAME_MAX       48
